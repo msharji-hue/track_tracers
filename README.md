@@ -3,15 +3,27 @@
 MATLAB codebase for detecting and tracking tracer markers (rod/foot markers) in high-speed videos from granular impact experiments. The goal is stable marker IDs across frames, robust handling of missed detections, and standardized outputs for depth, velocity, acceleration, and downstream modeling/plots.
 
 ## Quickstart
-1. Edit `config/config_example.m` with your video path and parameters.
-2. Run `scripts/track_tracers.m`.
-3. Inspect `debug/` overlays if tracking looks unstable.
-4. Export tracked trajectories for post-processing.
-## What’s inside
-- Marker detection (thresholding/segmentation + centroid extraction)
-- Frame-to-frame association (ID stability, gating, re-acquisition)
-- Debug mode (overlay frames + logs) to diagnose silent tracking failures
-- Standardized outputs (pixel coordinates and optional conversion to physical units)
+
+The **official entry point** is `scripts/run_track_tracers.m`. 
+Never call `track_tracers()` directly from the command window without a `params` struct.
+```matlab
+% In MATLAB, from the repo root:
+run('scripts/run_track_tracers.m')
+
+% Or, with custom params:
+params = struct();
+params.material    = "GB";
+params.batchName   = "Batch1";
+params.heightLabel = "H06";
+params.trialNum    = 1;
+params.version     = "short";
+results = track_tracers(params);
+```
+
+**Video file resolution:** The tracker accepts `.mov`, `.mp4`, or `.avi` and will
+pattern-match `<heightLabel>_<trialID>_<version>.*` if the exact filename is missing.
+If no video is found, the error message prints the directory searched, the pattern used,
+and the first 30 filenames in that folder to help diagnose path issues.
 
 ## Expected workflow
 1. Provide a video clip (short test clip recommended).
