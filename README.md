@@ -2,6 +2,11 @@
 
 MATLAB codebase for detecting and tracking tracer markers (rod/foot markers) in high-speed videos from granular impact experiments. The goal is stable marker IDs across frames, robust handling of missed detections, and standardized outputs for depth, velocity, acceleration, and downstream modeling/plots.
 
+## Quickstart
+1. Edit `config/config_example.m` with your video path and parameters.
+2. Run `scripts/track_tracers.m`.
+3. Inspect `debug/` overlays if tracking looks unstable.
+4. Export tracked trajectories for post-processing.
 ## What’s inside
 - Marker detection (thresholding/segmentation + centroid extraction)
 - Frame-to-frame association (ID stability, gating, re-acquisition)
