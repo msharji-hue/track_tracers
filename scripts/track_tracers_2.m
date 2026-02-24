@@ -7,7 +7,7 @@ projectRoot = ['/Users/muhannadalsharji/Library/CloudStorage/GoogleDrive-msharji
 material    = 'GB';        % 'GB' or 'CHIN'
 batchName   = 'Batch1';
 heightLabel = 'H06';
-trialNum    = 1;           % numeric
+trialNum    = 4;           % numeric
 clipType    = 'long';      % 'long' or 'short'
 trialID = sprintf('T%02d', trialNum);
 version = lower(clipType);
@@ -78,22 +78,36 @@ plot([rod_top(1) rod_tip(1)], [rod_top(2) rod_tip(2)], 'b-','LineWidth',2);
 u_ref = rod_top - rod_tip;
 u_ref = u_ref / norm(u_ref);
 
-% ---------------- CLICK BED LINE ----------------
-disp('Click TWO points on the BED line (left then right)');
+% ---------------- CLICK BED LINE (VERTICAL MODEL) ----------------
+disp('Click TWO points along the bed surface (TOP then BOTTOM)');  % pick along the vertical boundary
 [xb, yb] = ginput(2);
 
-m_bed = (yb(2) - yb(1)) / (xb(2) - xb(1));
-b_bed = yb(1) - m_bed * xb(1);
+plot(xb, yb, 'y-', 'LineWidth', 2);
 
-% draw it
-x_line = [1 size(ref_img,2)];
-y_line = m_bed*x_line + b_bed;
+% Bed modeled as: x_bed(y) = m_bed_y * y + b_bed_x
+m_bed_y = (xb(2) - xb(1)) / (yb(2) - yb(1) + eps);
+b_bed_x = xb(1) - m_bed_y * yb(1);
+
+fprintf('Bed: x = (%.6f)*y + (%.3f)\n', m_bed_y, b_bed_x);
+
+% Sanity: x_bed across full height should sit inside [0..W]
+
+H = size(ref_img,1);  W = size(ref_img,2);
+y_test = [1 H];
+x_test = m_bed_y*y_test + b_bed_x;
+fprintf('x_bed at y=1..H: %.2f to %.2f px (should be within 0..W=%d)\n', x_test(1), x_test(2), W);
+
+% overlay sanity (VERTICAL bed: x = m*y + b)
+
+y_line = [1 size(ref_img,1)];          % y from top to bottom of image
+x_line = m_bed_y * y_line + b_bed_x;   % x along the bed line
 plot(x_line, y_line, 'y-', 'LineWidth', 2);
 
-fprintf('Bed fit: m_bed=%.6f, b_bed=%.3f\n', m_bed, b_bed);
+fprintf('m_bed_y=%.6f, b_bed_x=%.3f\n', m_bed_y, b_bed_x);
+fprintf('x_bed at y=1..H: %.2f to %.2f px (should be within 0..W=%d)\n', ...
+    x_line(1), x_line(2), size(ref_img,2));
 
-disp('Section 1 complete.');
-
+disp('Section 1 is done.')
 %% SECTION 2: MARKER IDS FROM REFERENCE FRAME
 
 % --- Extract detections at reference frame ---
@@ -239,13 +253,15 @@ for fi = 1:nFrames
     % ---------- Rod tip position ----------
     rod_tip_px(fi,:) = rod_tip_px_ref + delta_s * markers.u_ref;
 
-    % ---------- Depth relative to bed ----------
+    % ---------- Depth relative to bed (VERTICAL BED) ----------
     x_now = rod_tip_px(fi,1);
     y_now = rod_tip_px(fi,2);
-
-    ybed = m_bed * x_now + b_bed;
-
-    z_tip_mm(fi) = -(y_now - ybed) * mm_per_px;
+    
+    xbed = m_bed_y * y_now + b_bed_x;   % bed x at this y
+    dx   = x_now - xbed;                % + means to the RIGHT of bed
+    
+    % Choose sign so penetration into bed is NEGATIVE (UFL-style)
+    z_tip_mm(fi) = +dx * mm_per_px;
 
 end
 
@@ -254,7 +270,7 @@ disp('Section 3 complete: rigid tip trajectory and z(t) computed.');
 %% SECTION 4–6: t(t0=impact) + v(t) + a(t) + t_stop (UFL-style)
 
 % SECTION 4: Time + units
-impactFrame0 = 97;                       % PLEASE MAKE SURE TO EDIT PER TRIAL!!
+impactFrame0 = 6;                       % PLEASE MAKE SURE TO EDIT PER TRIAL!!
 g_cm_s2 = 980;
 fps_true= 2715;                          % true camera acquisition fps 
 
@@ -415,6 +431,13 @@ kin.meta.version      = version;
 kin.meta.videoPath    = videoPath;
 kin.meta.detPath      = detPath;
 
+kin.calib.mm_per_px = mm_per_px;
+
+% bed model 
+kin.bed.model = 'x = m*y + b';
+kin.bed.m_bed_y = m_bed_y;
+kin.bed.b_bed_x = b_bed_x;
+
 kin.params.fps_used      = fps_used;
 kin.params.impactFrame0  = impactFrame0;
 kin.params.g_cm_s2       = g_cm_s2;
@@ -449,5 +472,154 @@ kin.stop.stop_discrepancy_flag  = stop_discrepancy_flag;
 kin.stop.t_stop_index = t_stop_index;
 kin.stop.z_at_stop_cm = z_at_stop_cm;
 
+kin.track.x_px = x_px;
+kin.track.y_px = y_px;
+kin.track.s_px = s_px;          % why not
+kin.track.nMarkers = nMarkers;
+kin.track.markers = markers;    % contains IDs, reference geometry, u_ref, etc.
+
+% --- save ---
+kinDir = fullfile(outRoot,'kinematics',heightLabel);
+if ~exist(kinDir,'dir'), mkdir(kinDir); end
+
+kinPath = fullfile(kinDir, [baseName '_kin.mat']);
+save(kinPath,'kin','-v7.3');
+fprintf('Saved: %s\n', kinPath);
+
 disp('Sections 4–6 complete: t, z, v, a, and stop-time computed.');
 
+%% --- SANITY PLOTS: z, v, a (subplots) ---
+% Assumes you already have:
+% t_s, z_tip_cm, v_tip_cm_s, a_tip_cm_s2, impactFrame0, fps_true, nFrames
+
+impact_index = impactFrame0 + 1;
+
+% ----- quick prints -----
+fprintf('\n--- SANITY (z,v,a) ---\n');
+fprintf('t_s(impact_index) = %.12f s (should be 0)\n', t_s(impact_index));
+fprintf('dt mean/std       = %.12g / %.12g s (should be 1/fps_true)\n', mean(diff(t_s)), std(diff(t_s)));
+fprintf('1/fps_true         = %.12g s\n', 1/fps_true);
+
+fprintf('z_tip_cm min/max   = %.3f / %.3f cm\n', min(z_tip_cm,[],'omitnan'), max(z_tip_cm,[],'omitnan'));
+fprintf('v_tip_cm_s min/max = %.3f / %.3f cm/s\n', min(v_tip_cm_s,[],'omitnan'), max(v_tip_cm_s,[],'omitnan'));
+fprintf('a_tip_cm_s2 min/max= %.1f / %.1f cm/s^2\n', min(a_tip_cm_s2,[],'omitnan'), max(a_tip_cm_s2,[],'omitnan'));
+
+% ----- sign sanity right after impact (should match your convention) -----
+k1 = min(nFrames, impact_index + 2);
+k2 = min(nFrames, impact_index + 30);
+
+dz = z_tip_cm(k2) - z_tip_cm(k1);                    % should be < 0 if penetration is negative
+vmed = median(v_tip_cm_s(k1:k2), 'omitnan');         % should be < 0
+dv = v_tip_cm_s(k2) - v_tip_cm_s(k1);                % should be > 0 as it slows toward 0
+
+fprintf('post-impact dz = %.5f cm (want < 0)\n', dz);
+fprintf('post-impact median v = %.5f cm/s (want < 0)\n', vmed);
+fprintf('post-impact dv = %.5f cm/s (want > 0)\n', dv);
+fprintf('---------------------\n\n');
+
+% ----- re-zero z at impact (so z_rel(t=0)=0) -----
+z_rel_cm = z_tip_cm - z_tip_cm(impact_index);
+
+% ----- full timeline subplots -----
+figure('Color','w');
+subplot(3,1,1);
+plot(t_s, z_rel_cm, '.-'); grid off; xline(0,'k--');
+ylabel('z - z(0) (cm)');
+title('Full timeline (re-zeroed: penetration should go negative)');
+
+subplot(3,1,2);
+plot(t_s, v_tip_cm_s, '.-'); grid off; xline(0,'k--');
+ylabel('v (cm/s)');
+
+subplot(3,1,3);
+plot(t_s, a_tip_cm_s2, 'o'); grid off; xline(0,'k--');
+xlabel('t (s)'); ylabel('a (cm/s^2)');
+
+% ----- zoom around impact -----
+W = 0.05;  % seconds on each side
+mask = (t_s >= -W) & (t_s <= W);
+
+figure('Color','w');
+subplot(3,1,1);
+plot(t_s(mask), z_rel_cm(mask), '.-'); grid off; xline(0,'k--');
+ylabel('z - z(0) (cm)');
+title(sprintf('Zoom around impact (\\pm %.3f s)', W));
+
+subplot(3,1,2);
+plot(t_s(mask), v_tip_cm_s(mask), '.-'); grid off; xline(0,'k--');
+ylabel('v (cm/s)');
+
+subplot(3,1,3);
+plot(t_s(mask), a_tip_cm_s2(mask), '.-'); grid off; xline(0,'k--');
+xlabel('t (s)'); ylabel('a (cm/s^2)');
+
+%% ----- Sanity Check Prompts -----%%
+
+% A) Bed geometry sanity; Expect: bed overlay matches the physical wall; 
+% x_bed stays within 0..W; |Δx| small (nearly vertical)
+
+H = size(ref_img,1);  W = size(ref_img,2);
+
+y_line = [1 H];
+x_line = m_bed_y*y_line + b_bed_x;
+
+fprintf('\n--- BED SANITY ---\n');
+fprintf('Frame W=%d, H=%d\n', W, H);
+fprintf('Bed model: x = m*y + b  (m=%.6g, b=%.3f)\n', m_bed_y, b_bed_x);
+fprintf('x_bed at y=1..H: %.2f -> %.2f px (should be within 0..%d)\n', x_line(1), x_line(2), W);
+fprintf('|Δx| across height: %.3f px (vertical wall => small)\n', abs(x_line(2)-x_line(1)));
+
+figure('Color','w'); imshow(ref_img); hold on;
+plot(x_line, y_line, 'y-', 'LineWidth', 2);
+title('Bed overlay (yellow) on reference frame');
+
+%% B) Penetration sign sanity (MUST pass); Expect: post-impact dz<0 and post-impact median v<0 
+
+impact_index = impactFrame0 + 1;
+k1 = impact_index + 2;
+k2 = min(nFrames, impact_index + 30);
+
+dz = z_tip_cm(k2) - z_tip_cm(k1);
+vmed = median(v_tip_cm_s(k1:k2), 'omitnan');
+
+fprintf('\n--- SIGN SANITY ---\n');
+fprintf('Post-impact dz = %.6f cm (want < 0)\n', dz);
+fprintf('Post-impact median v = %.6f cm/s (want < 0)\n', vmed);
+
+%% C) Pixel→mm sanity using rod length: Expect: measured pixel distance 
+% between your two clicks ≈ rod_length_mm / mm_per_px. (should be less than
+% 2 or 5% 
+
+rod_length_mm = 28.15; % your known rod length
+
+rod_len_px = norm(rod_top - rod_tip);
+mm_per_px_meas = rod_length_mm / rod_len_px;
+
+fprintf('\n--- mm/px SANITY (rod length) ---\n');
+fprintf('rod_len_px = %.3f px\n', rod_len_px);
+fprintf('mm_per_px (current) = %.6f\n', mm_per_px);
+fprintf('mm_per_px (measured from clicks) = %.6f\n', mm_per_px_meas);
+fprintf('percent diff = %.2f %%\n', 100*(mm_per_px_meas - mm_per_px)/mm_per_px);
+
+%% D) Tracking completeness sanity: Expect: most frames have many assigned markers; 
+% if median is like 4/8 consistently, tracking is shaky
+
+nAssigned = sum(isfinite(x_px) & isfinite(y_px), 1);
+fprintf('\n--- TRACKING SANITY ---\n');
+fprintf('assigned per frame min/median/max = %d / %d / %d (out of %d)\n', ...
+    min(nAssigned), round(median(nAssigned,'omitnan')), max(nAssigned), size(x_px,1));
+
+figure('Color','w'); plot(nAssigned,'.-'); grid on;
+xlabel('frame'); ylabel('markers assigned'); title('Markers assigned per frame');
+
+%% E) Dynamics plausibility sanity
+
+fprintf('\n--- DYNAMICS RANGE ---\n');
+fprintf('z_tip_cm min/max   = %.3f / %.3f cm\n', min(z_tip_cm,[],'omitnan'), max(z_tip_cm,[],'omitnan'));
+fprintf('v_tip_cm_s min/max = %.3f / %.3f cm/s\n', min(v_tip_cm_s,[],'omitnan'), max(v_tip_cm_s,[],'omitnan'));
+fprintf('a_tip_cm_s2 min/max= %.1f / %.1f cm/s^2\n', min(a_tip_cm_s2,[],'omitnan'), max(a_tip_cm_s2,[],'omitnan'));
+
+% Post-impact "settled" check: last 200 frames should be near constant z and v ~ 0
+tail = max(1,nFrames-200):nFrames;
+fprintf('tail z std = %.5f cm (small is good)\n', std(z_tip_cm(tail),'omitnan'));
+fprintf('tail v median = %.5f cm/s (near 0 is good)\n', median(v_tip_cm_s(tail),'omitnan'));
