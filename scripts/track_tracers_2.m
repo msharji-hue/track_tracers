@@ -1,169 +1,80 @@
-%% SECTION 1: SETUP 
+%% SECTION 1: Track Tracers 
 clear; close all; clc;
 
-%% USER IDENTIFIERS 
+%% 1) SETUP
+
 projectRoot = ['/Users/muhannadalsharji/Library/CloudStorage/GoogleDrive-msharji@umich.edu/' ...
-                'My Drive/Research /Videos/SP26/JerboaImpact_VideoExports'];
-material    = 'GB';        % 'GB' or 'CHIN'
-batchName   = 'Batch1';
-heightLabel = 'H06';
-trialNum    = 1;           % numeric
-clipType    = 'long';      % 'long' or 'short'
-trialID = sprintf('T%02d', trialNum);
-version = lower(clipType);
+               'My Drive/Research /Videos/SP26/JerboaImpact_VideoExports'];
 
-baseName = sprintf('%s_%s_%s', heightLabel, trialID, version);
+material    = 'GB';      % 'GB' or 'CHIN'
 
-%% INPUT VIDEO PATH 
-switch version
-    case 'long'
-        inDir = fullfile(projectRoot,'03_EXPORTS_LONG',heightLabel);
-    case 'short'
-        inDir = fullfile(projectRoot,'04_EXPORTS_SHORT',heightLabel);
-    otherwise
-        error('clipType must be long or short');
+batchName   = 'Batch1';     heightLabel = 'H06';
+trialNum    = 1;
+
+trialID   = sprintf('T%02d', trialNum);
+baseName  = sprintf('%s_%s_long', heightLabel, trialID);
+videoFile = sprintf('%s_%s_long.mov', heightLabel, trialID);
+
+inDir   = fullfile(projectRoot, '02_EXPORTS', material, batchName, heightLabel);
+outRoot = fullfile(projectRoot, '04_RESULTS', material, batchName);
+
+subFolders = {'detections','tracks','kinematics','figures','qa','logs'};
+for k = 1:numel(subFolders)
+    folderPath = fullfile(outRoot, subFolders{k}, heightLabel);
+    if ~exist(folderPath, 'dir')
+        mkdir(folderPath);
+    end
 end
 
-videoFile = sprintf('%s_%s_%s.mov', heightLabel, trialID, version);
 videoPath = fullfile(inDir, videoFile);
-
-if ~exist(videoPath,'file')
+if ~exist(videoPath, 'file')
     error('Video not found: %s', videoPath);
 end
 
-    % RESULTS ROOT 
-    outRoot = fullfile(projectRoot,'07_RESULTS',material,batchName);
-    
-    subFolders = {'detections','tracks','kinematics','figures','qa','logs'};
-    for k = 1:numel(subFolders)
-        f = fullfile(outRoot,subFolders{k});
-        if ~exist(f,'dir'), mkdir(f); end
-    end
-    
-    % calibration (edit if needed)
-    mm_per_px = 0.084682;
-    
-    % LOAD DETECTIONS 
-    detPath = fullfile(outRoot,'detections',[baseName '_detections.mat']);
-    if ~exist(detPath,'file')
-        error('Detections MAT not found: %s', detPath);
-    end
-    
-    S = load(detPath);
-    det = S.det;
-
-%% 1A) REFERENCE FRAME 
-refFrame0 = 0;
-iRef = refFrame0 + 1;
-
-v = VideoReader(videoPath);
-ref_img = read(v,iRef);
-
-figure(1); clf; imshow(ref_img); hold on;
-title(sprintf('%s reference frame0=%d', baseName, refFrame0));
-
-%% 1B) CLICK ROD AXIS (comment out)
-disp('Click rod TOP, then rod TIP');
-[xr, yr] = ginput(2);
-
-rod_top = [xr(1) yr(1)];
-rod_tip = [xr(2) yr(2)];
-
-plot(rod_top(1),rod_top(2),'go','LineWidth',2);
-plot(rod_tip(1),rod_tip(2),'ro','LineWidth',2);
-plot([rod_top(1) rod_tip(1)], [rod_top(2) rod_tip(2)], 'b-','LineWidth',2);
-
-% Separate x and y
-x0 = Cref(:,1);
-y0 = Cref(:,2);
-
-% Compute rod axis unit vector
-u_ref = rod_top - rod_tip;
-u_ref = u_ref / norm(u_ref);
-
-% Project detections along rod axis (tip → top ordering)
-proj = ([x0 y0] - rod_tip) * u_ref.';
-[~, idx] = sort(proj);     % smallest projection = closest to tip
-
-x0 = x0(idx);
-y0 = y0(idx);
-
-%% 1C) CLICK BED LINE (VERTICAL MODEL)
-disp('Click TWO points along the bed surface (TOP then BOTTOM)');  % pick along the vertical boundary
-[xb, yb] = ginput(2);
-
-plot(xb, yb, 'y-', 'LineWidth', 2);
-
-% Bed modeled as: x_bed(y) = m_bed_y * y + b_bed_x
-m_bed_y = (xb(2) - xb(1)) / (yb(2) - yb(1) + eps);
-b_bed_x = xb(1) - m_bed_y * yb(1);
-
-fprintf('Bed: x = (%.6f)*y + (%.3f)\n', m_bed_y, b_bed_x);
-
-% Sanity: x_bed across full height should sit inside [0..W]
-
-H = size(ref_img,1);  W = size(ref_img,2);
-y_test = [1 H];
-x_test = m_bed_y*y_test + b_bed_x;
-fprintf('x_bed at y=1..H: %.2f to %.2f px (should be within 0..W=%d)\n', x_test(1), x_test(2), W);
-
-% overlay sanity (VERTICAL bed: x = m*y + b)
-
-y_line = [1 size(ref_img,1)];          % y from top to bottom of image
-x_line = m_bed_y * y_line + b_bed_x;   % x along the bed line
-plot(x_line, y_line, 'y-', 'LineWidth', 2);
-
-fprintf('m_bed_y=%.6f, b_bed_x=%.3f\n', m_bed_y, b_bed_x);
-fprintf('x_bed at y=1..H: %.2f to %.2f px (should be within 0..W=%d)\n', ...
-    x_line(1), x_line(2), size(ref_img,2));
-
-disp('Section 1 is done.')
-%% SECTION 2: MARKER IDS FROM REFERENCE FRAME
-
-% --- Extract detections at reference frame ---
-Cref = det.detect.centersCell{iRef};
-
-if isempty(Cref)
-    error(['No circles detected in reference frame0 = %d.\n' ...
-           'Change refFrame0 and rerun Section 1.'], refFrame0);
+detFile = fullfile(outRoot, 'detections', heightLabel, [baseName '_detections.mat']);
+if ~exist(detFile, 'file')
+    error('Detections MAT not found: %s', detFile);
 end
 
-nMarkers = numel(x0);
-markerID = (1:nMarkers)';   % ID 1 = closest to rod tip
+S = load(detFile);
+detections = S.det.detect.centersCell;
 
-% --- Store marker reference data ---
-markers = struct();
-markers.ID        = markerID;
-markers.x_px0     = x0;
-markers.y_px0     = y0;
-markers.x_mm0     = x0 * mm_per_px;
-markers.y_mm0     = y0 * mm_per_px;
-markers.colors    = lines(nMarkers);
+firstCenters = detections{1};
+if isempty(firstCenters)
+    error('No detections found in first frame.');
+end
 
-% Store reference geometry for reproducibility
-markers.u_ref     = u_ref;
-markers.rod_tip0  = rod_tip;
-markers.rod_top0  = rod_top;
-markers.refFrame0 = refFrame0;
+x0 = firstCenters(:,1); y0 = firstCenters(:,2);
 
-% % Visual sanity check (Move to section 3)
-% figure(1); hold on;
-% 
-% for k = 1:nMarkers
-%     c = markers.colors(k,:);
-%     plot(x0(k), y0(k), 'o', ...
-%         'MarkerSize', 8, ...
-%         'LineWidth', 2, ...
-%         'Color', c, ...
-%         'MarkerFaceColor', 'none');
-%     
-%     text(x0(k)+5, y0(k), sprintf('%d', markerID(k)), ...
-%         'Color', c, ...
-%         'FontSize', 9, ...
-%         'FontWeight','bold');
-% end
+%% 2) BED LINE FROM TWO POINTS
 
-disp(['Section 2 complete: assigned ', num2str(nMarkers), ' marker IDs.']);
+% Enter two points on the bed line: [x y]
+bedPoint1 = [120, 80];  bedPoint2 = [135, 920];
+
+x1 = bedPoint1(1);  y1 = bedPoint1(2);
+x2 = bedPoint2(1);  y2 = bedPoint2(2);
+
+deltaX = x2 - x1;   deltaY = y2 - y1;
+
+% Implicit line form: A*x + B*y + C = 0
+lineA = y1 - y2;
+lineB = x2 - x1;
+lineC = x1*y2 - x2*y1;
+
+%% 3) ASSIGN MARKER IDS FROM FIRST FRAME
+
+if isempty(firstFrameCenters)
+    error('No circles detected in first frame.');
+end
+
+numberOfMarkers = size(firstFrameCenters, 1);
+markerIDs = (1:numberOfMarkers)';
+
+markerTable = struct();
+markerTable.id = markerIDs;
+markerTable.x = firstFrameCenters(:,1);
+markerTable.y = firstFrameCenters(:,2);
+markerTable.colors = lines(numberOfMarkers);
 
 %% SECTION 3: TRACK MARKERS (rigid 1D translation) (robust)
 

@@ -11,8 +11,6 @@ trialNum    = 2;
 
 % Clip type and file name (exported ProRes)
 videoFile   = sprintf('%s_T%02d_%s.mov', heightLabel, trialNum);
-
-% Physical timing choice (UFL replication)
 fps_true     = 2715;         % true camera acquisition fps
 
 % Detection settings
@@ -103,8 +101,6 @@ saveInfo.material   = material;     saveInfo.batchName  = batchName;
 saveInfo.heightLabel = heightLabel; saveInfo.trialNum   = trialNum;
 saveInfo.videoFile  = videoFile;    saveInfo.videoPath  = videoPath;
 saveInfo.fps_export = fps_export;   saveInfo.detDir     = detDir;
-
-% --- Save outputs ---
 det = save_detections(detectOut, saveInfo);
 
 %% 5) SIMPLE LOGGING (log only)
@@ -120,5 +116,4 @@ msg = sprintf(['%s | %s %s %s T%02d | fps_export=%.3f | ' ...
                fps_export, nFramesReadOK, userNote);
 
 fid = fopen(logFile, 'a');
-
 fprintf('Logged to: %s\n', logFile);
