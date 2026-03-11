@@ -1,141 +1,124 @@
 %% select_and_detect.m
 clear; close all; clc;
-%% 1) USER INPUTS  
-videoFile   = 'Test2_H18_edited.mov';
-frameStep   = 3;             % show every Nth frame when picking frames
-radiusRange = [10 40];       % pixels [10 40]
-sensitivity = 0.84;          % 0–1 (higher -> more detections)%0.82 
-edgeThresh  = 0.1;           % lower -> more sensitive edges
-polarity    = 'bright';      % 'bright' or 'dark'
-channel     = 'r';           % 'r','g','b' or anything else -> grayscale
 
-speed_pct   = 2;             % Adobe Premiere speed/duration (%) for THIS video
-doCLAHE     = true;          % local contrast boost (minimize distortion during impact)
-medianK     = 3;             % 1 disables; small odd ints like 3 or 5
-showCenters = true;          % draw blue '+' at centers
-ylwWidth    = 1.2;           % circle outline width
+%% 1) USER INPUTS
 
-%% 1.1) EXPERIMENT PATHS (EDIT PER RUN)
+% Trial identifiers
+material    = 'GB';          % "GB" or "CHIN"
+batchName   = 'Batch1';      % edit per batch number
+heightLabel = 'H10';
+trialNum    = 2;
 
-% base directory for this material / packing / height (up to H18)
-baseDir = ['/Users/muhannadalsharji/Library/CloudStorage/' ...
-    'GoogleDrive-msharji@umich.edu/My Drive/Research /Videos/Edited/New_Drop_Tests/Glass beads/H18'];
+% Clip type and file name (exported ProRes)
+videoFile   = sprintf('%s_T%02d_%s.mov', heightLabel, trialNum);
 
-% trial number and name
-trialNum  = 2;                           % change per run
-trialName = sprintf('Trial_%02d', trialNum);
+% Physical timing choice (UFL replication)
+fps_true     = 2715;         % true camera acquisition fps
 
-% full path for this specific trial (folder should contain the video)
-trialDir = fullfile(baseDir, trialName);
+% Detection settings
+radiusRange = [9 35];        % pixels, tune later
+sensitivity = 0.84;          % 0-1
+edgeThresh  = 0.10;          % 0-1
+polarity    = 'bright';      % dots should appear bright in redness image
 
-% label for this height (used in detections filename)
-heightLabel = 'H18';                      % keep in sync with folder / video
+% Redness image weights
+alphaG = 0.50;               % A = R - alphaG*G - betaB*B
+betaB  = 0.50;
 
-% make sure trial directory exists
-if ~exist(trialDir, 'dir')
-    mkdir(trialDir);
+% Minimal preprocessing
+doCLAHE = true;
+medianK = 3;                 % 1 disables; 3 is usually safe
+
+% Visualization for debugging
+showPreviewEveryN = 100;     % 0 disables; try 100 to preview every 100 frames
+showCenters       = true;
+
+%% 2) PROJECT PATHS
+
+% Data root (videos, results, logs, notes)
+projectRoot = ['/Users/muhannadalsharji/Library/CloudStorage/GoogleDrive-msharji@umich.edu/' ...
+               'My Drive/Research /Videos/SP26/JerboaImpact_VideoExports'];
+
+% Code root (Git repo, separate from data)
+codeDir = '/Users/muhannadalsharji/Documents/track_tracers';
+addpath(fullfile(codeDir, 'src'));
+
+% Videos
+rawDir = fullfile(projectRoot, '01_RAW', material, batchName);
+exportsDir = fullfile(projectRoot, '02_EXPORTS', material, batchName, heightLabel);
+
+% Results
+resultsRoot = fullfile(projectRoot, '04_RESULTS', material, batchName);
+logDir      = fullfile(projectRoot, '05_LOGS', material, batchName);
+
+detDir = fullfile(resultsRoot, 'detections', heightLabel);
+qaDir  = fullfile(resultsRoot, 'qa', heightLabel);
+
+% Create folders if missing
+if ~exist(detDir, 'dir'), mkdir(detDir); end
+if ~exist(qaDir,  'dir'), mkdir(qaDir);  end
+if ~exist(logDir, 'dir'), mkdir(logDir); end
+
+fprintf('Input dir: %s\n', inDir);
+fprintf('Results detections dir: %s\n', detDir);
+
+%% 3) LOAD VIDEO + METADATA
+
+videoPath = fullfile(inDir, videoFile);
+if ~exist(videoPath, 'file')
+    error('Video not found: %s', videoPath);
 end
 
-fprintf('Using trial directory: %s\n', trialDir);
+v = VideoReader(videoPath);
 
-%% 2) LOAD VIDEO + BASIC INFO
-v = VideoReader(fullfile(trialDir, videoFile));
-nFrames = floor(v.FrameRate * v.Duration);
-fps     = v.FrameRate;        % camera frame rate (Hz) for t_sec
-fprintf('Approx. %d frames in %s\n', nFrames, videoFile);
+% Export metadata
+fps_export = v.FrameRate;
+vidDur_s   = v.Duration;
+nFrames    = floor(fps_export * vidDur_s);
 
-%% 3) PICK REFERNCE FRAME 
+fprintf('Video: %s\n', videoFile);
+fprintf('Export fps = %.6f, Duration = %.3f s, Approx frames = %d\n', ...
+    fps_export, vidDur_s, nFrames);
 
-startIdx = [];
+% Frame indexing convention
+frame0 = (0:nFrames-1)';   % 0-based frame counter for exported clip
+iMat   = frame0 + 1;       % MATLAB indexing
 
-for k = 1:frameStep:nFrames
-    f = read(v, k);
-    figure(1); clf; imshow(f);
-    title(sprintf('Candidate start frame %d of %d', k, nFrames));
-    drawnow;
+%% 4) Call functions to detect and save frames
 
-    answ = input('Use this as FIRST frame? (y=yes, n=no, q=quit): ','s');
-    if strcmpi(answ,'y')
-        startIdx = k;
-        break
-    elseif strcmpi(answ,'q')
-        break
-    end
-end
+% --- Detection parameter struct ---
+params = struct();                  params.alphaG = alphaG;
+params.betaB = betaB;               params.doCLAHE = doCLAHE;
+params.medianK = medianK;           params.radiusRange = radiusRange;
+params.polarity = polarity;         params.sensitivity = sensitivity;
+params.edgeThresh = edgeThresh;     params.showPreviewEveryN = showPreviewEveryN;
+params.showCenters = showCenters;   params.heightLabel = heightLabel;
 
-if isempty(startIdx)
-    error('No start frame selected.');
-end
+% --- Run detection ---
+detectOut = detect_circles_per_frame(v, nFrames, params);
 
-% from here on: use every frame from startIdx to end
-selectedIdx = startIdx:nFrames;   % step = 1 (all frames)
-nSel       = numel(selectedIdx);
+% --- Save info struct ---
+saveInfo = struct();                saveInfo.material   = material;
+saveInfo.material   = material;     saveInfo.batchName  = batchName;
+saveInfo.heightLabel = heightLabel; saveInfo.trialNum   = trialNum;
+saveInfo.videoFile  = videoFile;    saveInfo.videoPath  = videoPath;
+saveInfo.fps_export = fps_export;   saveInfo.detDir     = detDir;
 
-%% 4) DETECT CIRCLES PER FRAME (with minimal pre-processing)
+% --- Save outputs ---
+det = save_detections(detectOut, saveInfo);
 
-results = struct('frame',cell(1,nSel),'centers',[],'radii',[]);
+%% 5) SIMPLE LOGGING (log only)
 
-for i = 1:nSel
-    frame_idx = selectedIdx(i);
-    f = read(v, frame_idx);
+userNote = input('Optional note for this trial (press Enter to skip): ', 's');
 
-    % choose channel
-    switch lower(channel)
-        case 'r', A = im2double(f(:,:,1));
-        case 'g', A = im2double(f(:,:,2));
-        case 'b', A = im2double(f(:,:,3));
-        otherwise, A = rgb2gray(f);
-    end
+logFile = fullfile(logDir, ['runlog_' datestr(now,'yyyymmdd') '.txt']);
+ts = datestr(now,'yyyy-mm-dd HH:MM:SS');
 
-    % pre-processing
-    if doCLAHE, A = adapthisteq(A); end
-    if medianK>1, A = medfilt2(A,[medianK medianK]); end
+msg = sprintf(['%s | %s %s %s T%02d | fps_export=%.3f | ' ...
+               'nFrames=%d | note=%s'], ...
+               ts, material, batchName, heightLabel, trialNum, ...
+               fps_export, nFramesReadOK, userNote);
 
-    % circle detection
-    [centers, radii] = imfindcircles(A, radiusRange, ...
-        'ObjectPolarity',polarity, ...
-        'Sensitivity',sensitivity, ...
-        'EdgeThreshold',edgeThresh);
+fid = fopen(logFile, 'a');
 
-    % store
-    results(i).frame   = frame_idx;
-    results(i).centers = centers;
-    results(i).radii   = radii;
-
-    % progress print
-    if mod(i,100) == 0 || i == nSel
-        fprintf('Processed %d / %d frames\n', i, nSel);
-    end
-end
-
-%% 5) SAVE DETECTIONS (CSV: one row per circle)
-
-% one detections file per trial, named by height
-outFile = fullfile(trialDir, sprintf('detections_%s.csv', heightLabel));
-
-fid = fopen(outFile,'w');
-fprintf(fid, 'nFrame,frame_idx,t_ms,t_sec,x,y,r,fps,speed_pct\n');   % header
-
-for i = 1:nSel
-    nFrame    = i-1;                 % 0,1,2,...
-    frame_idx = results(i).frame;    % actual video frame index
-    t_sec     = frame_idx / fps;     % video timeline seconds
-    t_ms      = t_sec * (speed_pct/100) * 1000;   % PHYSICAL milliseconds
-
-    C = results(i).centers;          % Nx2 [x y]
-    R = results(i).radii;            % Nx1 [r]
-
-    if isempty(C)
-        % write a single row to mark the frame (no detections)
-        fprintf(fid, '%d,%d,%.3f,%.6f,NaN,NaN,NaN,%.3f,%.2f\n', ...
-            nFrame, frame_idx, t_ms, t_sec, fps, speed_pct);
-    else
-        for k = 1:size(C,1)
-            fprintf(fid, '%d,%d,%.3f,%.6f,%.6f,%.6f,%.6f,%.3f,%.2f\n', ...
-                nFrame, frame_idx, t_ms, t_sec, C(k,1), C(k,2), R(k), fps, speed_pct);
-        end
-    end
-end
-fclose(fid);
-disp(['Saved detections to ', outFile]);
-
+fprintf('Logged to: %s\n', logFile);
