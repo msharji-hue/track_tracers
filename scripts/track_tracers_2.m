@@ -54,8 +54,6 @@ bedPoint1 = [120, 80];  bedPoint2 = [135, 920];
 x1 = bedPoint1(1);  y1 = bedPoint1(2);
 x2 = bedPoint2(1);  y2 = bedPoint2(2);
 
-deltaX = x2 - x1;   deltaY = y2 - y1;
-
 % Implicit line form: A*x + B*y + C = 0
 lineA = y1 - y2;
 lineB = x2 - x1;
@@ -70,118 +68,88 @@ end
 numberOfMarkers = size(firstFrameCenters, 1);
 markerIDs = (1:numberOfMarkers)';
 
-markerTable = struct();
-markerTable.id = markerIDs;
-markerTable.x = firstFrameCenters(:,1);
-markerTable.y = firstFrameCenters(:,2);
-markerTable.colors = lines(numberOfMarkers);
+initialMarkers = struct();
+initialMarkers.id = markerIDs;
+initialMarkers.x = firstFrameCenters(:,1);
+initialMarkers.y = firstFrameCenters(:,2);
+initialMarkers.colors = lines(numberOfMarkers);
 
-%% SECTION 3: TRACK MARKERS (rigid 1D translation) (robust)
+%% 4) TRACK MARKERS (Frame-to-frame displacement)
 
-% how many frames exist in my dataset
-nDetFrames = numel(det.detect.centersCell);
-nFrames  = nDetFrames;
-nMarkers = numel(markers.ID); % how many markers its tracking (how many IDs listed)
+numberOfFrames  = numel(detections);
+numberOfMarkers = size(firstFrameCenters, 1);
 
-x_px      = nan(nMarkers, nFrames);
-y_px      = nan(nMarkers, nFrames);
-s_px      = nan(nMarkers, nFrames);
-rod_tip_px= nan(nFrames,2);
-z_tip_mm  = nan(nFrames,1);
+trackedX = nan(numberOfMarkers, numberOfFrames);
+trackedY = nan(numberOfMarkers, numberOfFrames);
 
-%% Depth estimation (completely revamp this section!)
-s_ref = ([markers.x_px0 markers.y_px0] - markers.rod_tip0) * markers.u_ref.';
-rod_tip_px_ref = markers.rod_tip0;
+% Initialize frame 1
+trackedX(:,1) = firstFrameCenters(:,1);
+trackedY(:,1) = firstFrameCenters(:,2);
 
-assignTol_loose = 120;   % only for shift estimation
-assignTol_tight = 30;    % final assignment gate
+assignmentTolerancePx = 10;
 
-delta_s_last = 0;        % predicted translation (px along rod)
-
-for fi = 1:nFrames
-
-    C = det.detect.centersCell{fi};
-    if isempty(C)
+for frameIndex = 2:numberOfFrames
+    currentCenters = detections{frameIndex};
+    if isempty(currentCenters)
         continue
     end
 
-    % Project detections
-    s_det = (C - rod_tip_px_ref) * markers.u_ref.';
+    detectionAlreadyUsed = false(size(currentCenters,1), 1);
 
-    % ---------- PASS 1: estimate translation ----------
-    usedDet = false(size(s_det));
-    s_temp  = nan(nMarkers,1);
+    for markerIndex = 1:numberOfMarkers
+        lastValidFrame = find(isfinite(trackedX(markerIndex,1:frameIndex-1)), 1, 'last');
+        if isempty(lastValidFrame)
+            continue
+        end
 
-    for k = 1:nMarkers
-        ds = abs(s_det - (s_ref(k) + delta_s_last));
-        ds(usedDet) = inf;
+        previousX = trackedX(markerIndex, lastValidFrame);
+        previousY = trackedY(markerIndex, lastValidFrame);
 
-        [dmin,j] = min(ds);
+        distancesPx = sqrt((currentCenters(:,1) - previousX).^2 + ...
+                           (currentCenters(:,2) - previousY).^2);
 
-        if dmin < assignTol_loose
-            s_temp(k) = s_det(j);
-            usedDet(j) = true;
+        distancesPx(detectionAlreadyUsed) = inf;
+
+        [minimumDistancePx, matchedDetectionIndex] = min(distancesPx);
+
+        if minimumDistancePx <= assignmentTolerancePx
+            trackedX(markerIndex, frameIndex) = currentCenters(matchedDetectionIndex, 1);
+            trackedY(markerIndex, frameIndex) = currentCenters(matchedDetectionIndex, 2);
+            detectionAlreadyUsed(matchedDetectionIndex) = true;
         end
     end
-
-    valid = isfinite(s_temp);
-
-    if any(valid)
-        delta_s = median(s_temp(valid) - s_ref(valid));
-        delta_s_last = delta_s;
-    else
-        delta_s = delta_s_last;
-    end
-
-    % ---------- PASS 2: final assignment ----------
-    usedDet = false(size(s_det));
-
-    for k = 1:nMarkers
-        target = s_ref(k) + delta_s;
-
-        ds = abs(s_det - target);
-        ds(usedDet) = inf;
-
-        [dmin,j] = min(ds);
-
-        if dmin < assignTol_tight
-            x_px(k,fi) = C(j,1);
-            y_px(k,fi) = C(j,2);
-            s_px(k,fi) = s_det(j);
-            usedDet(j) = true;
-        end
-    end
-
-    % ---------- Rod tip position ----------
-    rod_tip_px(fi,:) = rod_tip_px_ref + delta_s * markers.u_ref;
-
-    % ---------- Depth relative to bed (VERTICAL BED) ----------
-    x_now = rod_tip_px(fi,1);
-    y_now = rod_tip_px(fi,2);
-    
-    xbed = m_bed_y * y_now + b_bed_x;   % bed x at this y
-    dx   = x_now - xbed;                % + means to the RIGHT of bed
-    
-    % Choose sign so penetration into bed is NEGATIVE (UFL-style)
-    z_tip_mm(fi) = +dx * mm_per_px;
-
 end
 
-disp('Section 3 complete: rigid tip trajectory and z(t) computed.');
+% Mean position of each marker across all frames it was detected
+meanTrackedX = mean(trackedX, 2, 'omitnan');
+meanTrackedY = mean(trackedY, 2, 'omitnan');
 
-%% SECTION 4: t(t0=impact) 
+% Frame-to-frame pixel displacement
+deltaXPerFrame = diff(trackedX, 1, 2);
+deltaYPerFrame = diff(trackedY, 1, 2);
 
-% SECTION 4: Time + units
-impactFrame0 = 16;                       % PLEASE MAKE SURE TO EDIT PER TRIAL!!
-g_cm_s2 = 980;
-fps_true= 2715;                          % true camera acquisition fps 
+fprintf('Tracking complete: %d markers across %d frames.\n', ...
+    numberOfMarkers, numberOfFrames);
+%% 5) TOE DEPTH RELATIVE TO BED LINE
 
-frame0 = (0:nFrames-1)';                 % 0-based
-t_s    = (frame0 - impactFrame0) / fps_true;   % aligned so t=0 at impact
-impact_index = impactFrame0 + 1;         % MATLAB index
+toeOffsetMm = 12.3;     % physical distance from tracked marker to toe tip
+millimetersPerPixel = 0.15;
+toeMarkerID = 1;        % marker closest to toe tip
 
-z_tip_cm = z_tip_mm(:) / 10;             % UFL-style reporting
-z_valid_mask = isfinite(z_tip_cm);
+bedLineNorm = sqrt(lineA^2 + lineB^2);
+if bedLineNorm == 0
+    error('Bed line coefficients are invalid.');
+end
+
+toeMarkerX = trackedX(toeMarkerID, :);
+toeMarkerY = trackedY(toeMarkerID, :);
+
+markerToBedSignedPx = (lineA .* toeMarkerX + lineB .* toeMarkerY + lineC) ./ bedLineNorm;
+markerToBedSignedMm = markerToBedSignedPx .* millimetersPerPixel;
+
+toeDepthMm = markerToBedSignedMm - toeOffsetMm;
+
+fprintf('Computed toe depth for marker %d.\n', toeMarkerID);
 
 %% SECTION 5: v(t) via local linear fit of z(t)
 % window: 21 frames
