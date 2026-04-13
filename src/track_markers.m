@@ -10,7 +10,21 @@ function [trackedX, trackedY] = track_markers(detections, firstFrameCenters, tol
 %       trackedX - M x nFrames matrix of x positions (NaN = not detected)
 %       trackedY - M x nFrames matrix of y positions (NaN = not detected)
 
-    if nargin < 3, tolerancePx = 10; end
+    if nargin < 3 || isempty(tolerancePx)
+        % auto-estimate: use median nearest-neighbour distance in frame 1
+        % as a baseline, then allow 2x that as tolerance
+        if size(detections{1}, 1) > 1
+            D = pdist(detections{1}(:,1:2));
+            tolerancePx = 0.5 * min(D);   % half the min inter-marker distance
+        else
+            tolerancePx = 20;
+        end
+        fprintf('Auto tolerance: %.1f px\n', tolerancePx);
+    end
+
+    % Sort markers by x descending so toe (rightmost) is always marker 1
+    [~, sortIdx]      = sort(firstFrameCenters(:,1), 'descend');
+    firstFrameCenters = firstFrameCenters(sortIdx, :);
 
     nFrames  = numel(detections);
     nMarkers = size(firstFrameCenters, 1);
