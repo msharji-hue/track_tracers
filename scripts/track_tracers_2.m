@@ -57,7 +57,7 @@ g_cm_s2 = 980;
 [trackedX, trackedY] = track_markers(detections, firstFrameCenters);
 [t_s, depthRod_cm, z_smooth, v_smooth, a_smooth, impact_index, toeMarkerID, toePx] = toe_kinematics(trackedX, trackedY, lineA, lineB, lineC, dt, mmPerPx, -373.87);
 
-a_plus_g = g_cm_s2 - a_smooth;
+a_plus_g = g_cm_s2 + a_smooth;
 v0_cm_s  = v_smooth(impact_index);
 fprintf('Impact frame: %d  |  v0 = %.2f cm/s\n', impact_index, v0_cm_s);
 
@@ -67,7 +67,7 @@ fprintf('Stop frame: %d  |  t_stop = %.4f s\n', stopFrame, t_s(stopFrame));
 %% 5) PLOT — sanity check
 figure;
 subplot(3,1,1)
-plot(t_s, depthRod_cm, 'k.', 'MarkerSize', 4); hold on
+plot(t_s(1:stopFrame), depthRod_cm(1:stopFrame), 'k.', 'MarkerSize', 4); hold on
 plot(t_s, z_smooth, 'r', 'LineWidth', 1.5)
 xline(0, '--k', 'impact'); ylabel('depth (cm)'); legend('raw','poly fit'); grid on
 
