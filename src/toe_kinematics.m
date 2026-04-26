@@ -1,4 +1,4 @@
-function [t_s, depthRod_cm, z_smooth, v_smooth, a_smooth, impact_index, toeMarkerID, toePx] = toe_kinematics(trackedX, trackedY, lineA, lineB, lineC, dt, mmPerPx, impactDistPx)
+function [t_s, depthRod_cm, z_smooth, v_smooth, a_smooth, impact_index, toeMarkerID, toePx, stopFrame, sgOrder, sgWindow] = toe_kinematics(trackedX, trackedY, lineA, lineB, lineC, dt, mmPerPx, impactDistPx)
 % TOE_KINEMATICS  Compute depth, velocity and acceleration of the toe marker.
 
     [~, toeMarkerID]  = max(mean(trackedX, 2, 'omitnan'));
@@ -11,8 +11,8 @@ function [t_s, depthRod_cm, z_smooth, v_smooth, a_smooth, impact_index, toeMarke
     depthRod_cm = (toePx - toePx(impact_index)) .* mmPerPx ./ 10;
 
    % Savitzky-Golay parameters
-    sgOrder  = 4;
-    sgWindow = 111;
+    sgOrder  = 3;
+    sgWindow = 121;
 
     % Apply filter only over valid (non-NaN) region to avoid edge distortion
     validIdx = find(isfinite(depthRod_cm));
