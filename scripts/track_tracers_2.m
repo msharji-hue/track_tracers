@@ -1,6 +1,6 @@
 %% track_tracers_2.m
 clear; close all; clc;
-
+    
 %% 1) SETUP
 codeDir = '/Users/muhannadalsharji/Documents/track_tracers';
 addpath(fullfile(codeDir, 'src'));
@@ -34,7 +34,7 @@ x0 = detections{1}(:,1);
 y0 = detections{1}(:,2);
 
 %% 2) BED LINE
-bedPoint1 = [20, 0];  bedPoint2 = [20, 51];
+bedPoint1 = [17, 0];  bedPoint2 = [17, 47];
 lineA = bedPoint1(2) - bedPoint2(2);
 lineB = bedPoint2(1) - bedPoint1(1);
 lineC = bedPoint1(1)*bedPoint2(2) - bedPoint2(1)*bedPoint1(2);
@@ -54,13 +54,21 @@ mmPerPx = 0.1079;
 g_cm_s2 = 980;
 
 [trackedX, trackedY] = track_markers(detections, firstFrameCenters, 100);
-[t_s, depthRod_cm, z_smooth, v_smooth, a_smooth, impact_index, toeMarkerID, toePx] = toe_kinematics(trackedX, trackedY, lineA, lineB, lineC, dt, mmPerPx, -373.87);
 
-v0_cm_s   = v_smooth(impact_index);
-stopFrame = find(v_smooth(impact_index:end) <= 0, 1, 'first') + impact_index - 1;
+[t_s, depthRod_cm, z_smooth, v_smooth, a_smooth, ...
+ impact_index, toeMarkerID, toePx, stopFrame, sgOrder, sgWindow] = ...
+    toe_kinematics(trackedX, trackedY, lineA, lineB, lineC, ...
+                   dt, mmPerPx, -373.87);
+
+% Use outputs directly — do not recompute stopFrame here
+v0_cm_s    = v_smooth(impact_index);
 d_final_cm = depthRod_cm(stopFrame);
 t_stop_s   = t_s(stopFrame);
-fprintf('v0 = %.2f cm/s  |  d_final = %.3f cm  |  t_stop = %.4f s\n', v0_cm_s, d_final_cm, t_stop_s);
+
+fprintf('v0 = %.2f cm/s  |  d_final = %.3f cm  |  t_stop = %.4f s\n', ...
+    v0_cm_s, d_final_cm, t_stop_s);
+fprintf('SG: order=%d  window=%d frames (%.1f ms)\n', ...
+    sgOrder, sgWindow, sgWindow*dt*1000);
 
 %% 5) PLOT
 a_plus_g = -a_smooth - g_cm_s2;
@@ -136,7 +144,9 @@ kinematics = struct('t_s',          t_s, ...
                     'impact_index', impact_index, ...
                     'stopFrame',    stopFrame, ...
                     'toeMarkerID',  toeMarkerID, ...
-                    'toePx',        toePx);
+                    'toePx',        toePx, ...
+                    'sgOrder',      sgOrder, ...
+                    'sgWindow',     sgWindow);
 
 H_cm    = trialInfo.h_cm + d_final_cm;
 scalars = struct('v0_cm_s',    v0_cm_s, ...
@@ -155,6 +165,6 @@ for figNum = 1:3
     fh      = figure(figNum);
     figBase = sprintf('%s_T%02d_fig%d', trialInfo.heightLabel, trialInfo.trialNum, figNum);
     exportgraphics(fh, fullfile(figDir, [figBase '.png']), 'Resolution', 300);
-    savefig(fh, fullfile(figDir, [figBase '.fig']));
+    savefig(fh,         fullfile(figDir, [figBase '.fig']));
     fprintf('Figure %d saved: %s\n', figNum, figBase);
 end
