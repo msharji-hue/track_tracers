@@ -19,7 +19,7 @@ trialInfo = struct('material',    material{1}, ...
                    'h_cm',        str2double(material{5}), ...
                    'sgOrder',     str2double(material{6}), ...
                    'sgWindow',    str2double(material{7}), ...
-                   'fps_true',    2350);
+                   'fps_true',    2250);
 
 outRoot   = uigetdir(pwd, 'Select results root folder');
 subFolders = {'detections','tracks','kinematics','figures','qa','logs'};
@@ -34,7 +34,7 @@ x0 = detections{1}(:,1);
 y0 = detections{1}(:,2);
 
 %% 2) BED LINE
-bedPoint1 = [17, 0];  bedPoint2 = [17, 47];
+bedPoint1 = [20, 0];  bedPoint2 = [20, 51];
 lineA = bedPoint1(2) - bedPoint2(2);
 lineB = bedPoint2(1) - bedPoint1(1);
 lineC = bedPoint1(1)*bedPoint2(2) - bedPoint2(1)*bedPoint1(2);

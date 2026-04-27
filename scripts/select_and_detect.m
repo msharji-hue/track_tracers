@@ -8,17 +8,17 @@ addpath(fullfile(codeDir, 'src'));
 %% 2) USER INPUTS — folders + trial info
 framesDir  = uigetdir(pwd,  'Select folder containing PNG frames');
 resultsDir = uigetdir(pwd,  'Select folder to save results');
-folderName = inputdlg('Name your results subfolder:', 'Output', 1, {'detections'});
+folderName = inputdlg('Name your results subfolder:', 'Output', 1, {'LDH_X_X'});
 detDir     = fullfile(resultsDir, folderName{1});
 if ~exist(detDir, 'dir'), mkdir(detDir); end
 
 material    = inputdlg({'Material (GB or CHIN)','Batch','Height label','Trial number'}, ...
-                        'Trial Info', 1, {'GB','Batch1','H10','1'});
+                        'Trial Info', 1, {'GB','Batch 1','H10','1'});
 trialInfo   = struct('material',  material{1}, ...
                      'batchName', material{2}, ...
                      'heightLabel', material{3}, ...
                      'trialNum',  str2double(material{4}), ...
-                     'fps_true',  2350);
+                     'fps_true',  2250);
 
 %% 3) DETECTION PARAMETERS
 params = struct();

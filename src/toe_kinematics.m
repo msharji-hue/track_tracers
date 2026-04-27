@@ -12,7 +12,7 @@ function [t_s, depthRod_cm, z_smooth, v_smooth, a_smooth, impact_index, toeMarke
 
    % Savitzky-Golay parameters
     sgOrder  = 3;
-    sgWindow = 121;
+    sgWindow = 95;
 
     % Apply filter only over valid (non-NaN) region to avoid edge distortion
     validIdx = find(isfinite(depthRod_cm));
