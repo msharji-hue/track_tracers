@@ -1,6 +1,6 @@
 function trials = load_selected_trials()
-% LOAD_SELECTED_TRIALS  Prompt user to select kinematics .mat files.
-%   Opens multiple file picker dialogs until user cancels.
+% LOAD_SELECTED_TRIALS  Prompt user to select kinematics .mat files,
+%   then optionally remove outlier trials before returning.
 
     trials = struct([]);
     i      = 0;
@@ -28,5 +28,24 @@ function trials = load_selected_trials()
     % Sort by h_cm
     [~, idx] = sort([trials.h_cm]);
     trials   = trials(idx);
-    fprintf('Loaded %d trials across %d drop heights.\n', numel(trials), numel(unique([trials.h_cm])));
+    fprintf('Loaded %d trials across %d drop heights.\n', ...
+        numel(trials), numel(unique([trials.h_cm])));
+
+    % Optional removal 
+    fprintf('\n── Loaded trials ────────────────────────────────────\n');
+    for k = 1:numel(trials)
+        fprintf('  [%2d]  h=%5.2f cm  |  T%02d  |  v0=%6.1f cm/s  |  d=%.3f cm\n', ...
+            k, trials(k).h_cm, trials(k).trialInfo.trialNum, ...
+            trials(k).scalars.v0_cm_s, trials(k).scalars.d_final_cm);
+    end
+
+    remove = input('\nEnter trial indices to remove (e.g. [3 7]), or [] to keep all: ');
+    if ~isempty(remove)
+        remove = unique(round(remove));
+        remove = remove(remove >= 1 & remove <= numel(trials));
+        trials(remove) = [];
+        fprintf('Removed %d trial(s). %d remaining.\n', numel(remove), numel(trials));
+    else
+        fprintf('No trials removed.\n');
+    end
 end

@@ -37,7 +37,7 @@ for i = 1:nFrames
     B = im2double(rgb(:,:,3));
     A = max(min(R - params.alphaG.*G - params.betaB.*B, 1), 0);
 
-    if params.doCLAHE,    A = adapthisteq(A);                              end
+    if params.doCLAHE,     A = adapthisteq(A);                               end
     if params.medianK > 1, A = medfilt2(A, [params.medianK params.medianK]); end
 
     % --- Detect circles ---

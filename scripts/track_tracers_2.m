@@ -5,27 +5,48 @@ clear; close all; clc;
 codeDir = '/Users/muhannadalsharji/Documents/track_tracers';
 addpath(fullfile(codeDir, 'src'));
 
+% Select detections .mat file
 [file, detDir] = uigetfile('*.mat', 'Select detections .mat file');
 detFile        = fullfile(detDir, file);
 
-material = inputdlg({'Material','Batch','Height label','Trial number', ...
-                     'Freefall height (cm)','SG order','SG window'}, ...
-                     'Trial Info', 1, ...
-                     {'GB','Batch1','H06','1','15.24','4','91'});
+% Load fps from video metadata 
+S_check   = load(detFile);
+framesDir = S_check.det.meta.framesDir;
+
+metaFile = fullfile(framesDir, 'video_meta.mat');
+if exist(metaFile, 'file')
+    meta     = load(metaFile);
+    fps_true = meta.fps_true;
+    fprintf('Loaded FPS from metadata: %.4f\n', fps_true);
+else
+    fps_true = 2250;
+    warning('No video_meta.mat found — using default fps=%.0f', fps_true);
+end
+
+% Trial info dialog
+material  = inputdlg({'Material','Batch','Height label','Trial number', ...
+                      'Freefall height (cm)'}, ...
+                      'Trial Info', 1, ...
+                      {'GB','Batch1','H06','1','15.24'});
+
 trialInfo = struct('material',    material{1}, ...
                    'batchName',   material{2}, ...
                    'heightLabel', material{3}, ...
                    'trialNum',    str2double(material{4}), ...
                    'h_cm',        str2double(material{5}), ...
-                   'sgOrder',     str2double(material{6}), ...
-                   'sgWindow',    str2double(material{7}), ...
-                   'fps_true',    2250);
+                   'fps_true',    fps_true);
 
-outRoot   = uigetdir(pwd, 'Select results root folder');
+% Select results root + create subfolders
+outRoot    = uigetdir(pwd, 'Select results root folder');
 subFolders = {'detections','tracks','kinematics','figures','qa','logs'};
 for k = 1:numel(subFolders)
     mkdir(fullfile(outRoot, subFolders{k}, trialInfo.heightLabel));
 end
+
+trialTag = sprintf('%s_T%02d', trialInfo.heightLabel, trialInfo.trialNum);
+trialDir = fullfile(outRoot, 'detections', trialInfo.heightLabel, trialTag);
+if ~exist(trialDir, 'dir'), mkdir(trialDir); end
+fprintf('Trial folder: %s\n', trialDir);
 
 S          = load(detFile);
 detections = S.det.detect.centersCell;
@@ -34,7 +55,7 @@ x0 = detections{1}(:,1);
 y0 = detections{1}(:,2);
 
 %% 2) BED LINE
-bedPoint1 = [17, 0];  bedPoint2 = [17, 47];
+bedPoint1 = [21, 0];  bedPoint2 = [21, 48];
 lineA = bedPoint1(2) - bedPoint2(2);
 lineB = bedPoint2(1) - bedPoint1(1);
 lineC = bedPoint1(1)*bedPoint2(2) - bedPoint2(1)*bedPoint1(2);
@@ -58,7 +79,7 @@ g_cm_s2 = 980;
 [t_s, depthRod_cm, z_smooth, v_smooth, a_smooth, ...
  impact_index, toeMarkerID, toePx, stopFrame, sgOrder, sgWindow] = ...
     toe_kinematics(trackedX, trackedY, lineA, lineB, lineC, ...
-                   dt, mmPerPx, -373.87);
+                   dt, mmPerPx, -350);
 
 % Use outputs directly — do not recompute stopFrame here
 v0_cm_s    = v_smooth(impact_index);

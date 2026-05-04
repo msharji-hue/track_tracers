@@ -1,17 +1,17 @@
 function [col, marker, linestyle] = get_height_style(h_cm)
 
     styles = {
-        15.24,  [0.00 0.27 0.60],  '^',  '-';    % deep blue
-        20.32,  [0.00 0.65 0.65],  'o',  '-';    % teal
-        25.40,  [0.20 0.70 0.30],  's',  '-';    % green
-        30.48,  [0.85 0.45 0.00],  'v',  '-';    % orange
-        35.56,  [0.75 0.10 0.50],  'x',  '-.';   % purple
-        40.64,  [0.85 0.10 0.80],  'd',  '-.';   % magenta
-        45.72,  [0.70 0.09 0.12],  'p',  '-.';   % crimson
+        15.24,  [0.20 0.10 0.60],  'o',  '-';    % circle
+        20.32,  [0.15 0.35 0.80],  's',  '-';    % square
+        25.40,  [0.10 0.60 0.70],  '^',  '-';    % triangle up
+        30.48,  [0.15 0.70 0.30],  'd',  '-';    % diamond
+        35.56,  [0.80 0.70 0.10],  'v',  '-.';   % triangle down
+        40.64,  [0.85 0.40 0.10],  'p',  '-.';   % pentagon
+        45.72,  [0.75 0.10 0.10],  'h',  '-.';   % hexagon
     };
 
     for k = 1:size(styles, 1)
-        if abs(h_cm - styles{k,1}) < 1.5    % <-- widened tolerance to 1.5 cm
+        if abs(h_cm - styles{k,1}) < 1.5
             col       = styles{k,2};
             marker    = styles{k,3};
             linestyle = styles{k,4};

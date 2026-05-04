@@ -1,7 +1,7 @@
 function [ax, peakVals] = plot_time_series(heights, field, scalarField, ...
                                             scaleFactor, figName, ylab, legendLoc, cmap)
 % PLOT_TIME_SERIES  Raw dots + shaded mean ± 1 std band for any kinematics
-%   field vs physical time.
+%   field vs physical time. Used for z vs t, v vs t, a+g vs t overlays.
 %
 %   Inputs:
 %       heights     - struct array from group_trials_by_height
@@ -10,23 +10,31 @@ function [ax, peakVals] = plot_time_series(heights, field, scalarField, ...
 %       scaleFactor - multiply scalar by this (e.g. 10 for cm->mm)
 %       figName     - figure window name string
 %       ylab        - y-axis label string
-%       legendLoc   - legend location string
-%       cmap        - optional [nHeights x 3] colormap matrix (default: get_height_style)
+%       legendLoc   - 'none' to suppress, or any valid Location string
+%       cmap        - optional [nHeights x 3] colormap (default: get_height_style)
+%
+%   Outputs:
+%       ax       - axes handle
+%       peakVals - struct with scalar values + v0 stats per height
 
     if nargin < 8, cmap = []; end
 
     fig = figure('Name', figName);
-    fig.Position = [100 100 820 520];
-    ax  = axes(fig); hold(ax, 'on');
+    fig.Position = [100 100 980 520];              % wider for outside legend
+    ax  = axes(fig, 'Position', [0.08 0.11 0.74 0.82]);
+    hold(ax, 'on');
 
-    % ── Raw dots (faint black, per trial) ────────────────────────────────
+    % ── Raw dots (per height shape, subsampled every 5 frames) ───────────
     for j = 1:numel(heights)
+        [~, marker] = get_height_style(heights(j).h_cm);
         for i = 1:heights(j).nTrials
-            k = heights(j).trials(i).kinematics;
-            plot(ax, k.t_s(k.impact_index+1:k.stopFrame), ...
-                 k.(field)(k.impact_index+1:k.stopFrame), '.', ...
-                 'Color',            [0 0 0 0.25], ...
-                 'MarkerSize',       3, ...
+            k        = heights(j).trials(i).kinematics;
+            idx_plot = 1:5:k.stopFrame;
+            plot(ax, k.t_s(idx_plot), ...
+                 k.(field)(idx_plot), marker, ...
+                 'Color',            [0 0 0 0.35], ...
+                 'MarkerSize',       4, ...
+                 'LineStyle',        'none', ...
                  'HandleVisibility', 'off');
         end
     end
@@ -36,7 +44,6 @@ function [ax, peakVals] = plot_time_series(heights, field, scalarField, ...
     for j = 1:numel(heights)
         hg = heights(j);
 
-        % Color: use cmap if provided, else get_height_style
         if ~isempty(cmap)
             col = cmap(j,:);
         else
@@ -45,7 +52,6 @@ function [ax, peakVals] = plot_time_series(heights, field, scalarField, ...
 
         [tPhys, yMean, yStd, nValid] = interp_to_norm_time(hg, field);
 
-        % Thinner line if fewer than 3 trials
         lw = 2.5;
         if hg.nTrials < 3, lw = 1.2; end
 
@@ -54,17 +60,29 @@ function [ax, peakVals] = plot_time_series(heights, field, scalarField, ...
             1, lw);
 
         peakVals.(sprintf('h%d', round(hg.h_cm))) = struct( ...
-            'h',    hg.h_cm, ...
-            'v0',   hg.v0_mean, ...
-            'v0std',hg.v0_std, ...
-            'vals', hg.(scalarField) * scaleFactor);
+            'h',     hg.h_cm, ...
+            'v0',    hg.v0_mean, ...
+            'v0std', hg.v0_std, ...
+            'vals',  hg.(scalarField) * scaleFactor);
     end
 
     % ── Axes formatting ───────────────────────────────────────────────────
     xline(ax, 0, '--k', 'HandleVisibility', 'off');
-    legend(ax, 'show', 'Location', legendLoc, 'FontSize', 11, 'Box', 'off');
-    set(ax, 'FontSize', 13, 'Box', 'off');
-    grid(ax, 'on');
+
+    % Legend — outside if 'none', otherwise standard location
+    if ~strcmp(legendLoc, 'none')
+        legend(ax, 'show', 'Location', legendLoc, 'FontSize', 11, 'Box', 'off');
+    else
+        lgd          = legend(ax, 'show', 'FontSize', 10, 'Box', 'off');
+        lgd.Location = 'none';
+        lgd.Position = [0.84 0.28 0.14 0.50];   % right of axes
+    end
+
+    set(ax, 'FontSize', 13, 'Box', 'on', ...
+        'LineWidth',  1.2, ...
+        'XColor',     [0.1 0.1 0.1], ...
+        'YColor',     [0.1 0.1 0.1]);
+    grid(ax, 'off');
     xlabel(ax, 't  (s)', 'FontSize', 14);
     ylabel(ax, ylab,     'FontSize', 14);
 end

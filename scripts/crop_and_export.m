@@ -14,7 +14,6 @@ folderName = inputdlg('Name your output folder:', 'Output Folder', 1, {'frames_o
 outputDir  = fullfile(parentDir, folderName{1});
 filterType = 'sharpen';   % 'none' | 'grayscale' | 'gaussian' | 'sharpen'
 % ─────────────────────────────────────────────────────────────
-
 v          = open_video(videoPath);
 startFrame = pick_start_frame(v);
 endFrame   = pick_end_frame(v, startFrame);

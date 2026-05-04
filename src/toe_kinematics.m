@@ -5,7 +5,7 @@ function [t_s, depthRod_cm, z_smooth, v_smooth, a_smooth, ...
 
     % Optional name-value args
     p = inputParser;
-    addParameter(p, 'sgWindow', 81);   % empty = auto
+    addParameter(p, 'sgWindow', 71);   % empty = auto
     addParameter(p, 'sgOrder',  3);
     parse(p, varargin{:});
     sgOrder     = p.Results.sgOrder;
