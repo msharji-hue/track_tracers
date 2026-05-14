@@ -67,22 +67,22 @@ function [ax, peakVals] = plot_time_series(heights, field, scalarField, ...
     end
 
     % ── Axes formatting ───────────────────────────────────────────────────
-    xline(ax, 0, '--k', 'HandleVisibility', 'off');
-
-    % Legend — outside if 'none', otherwise standard location
-    if ~strcmp(legendLoc, 'none')
-        legend(ax, 'show', 'Location', legendLoc, 'FontSize', 11, 'Box', 'off');
-    else
-        lgd          = legend(ax, 'show', 'FontSize', 10, 'Box', 'off');
-        lgd.Location = 'none';
-        lgd.Position = [0.84 0.28 0.14 0.50];   % right of axes
-    end
-
-    set(ax, 'FontSize', 13, 'Box', 'on', ...
-        'LineWidth',  1.2, ...
-        'XColor',     [0.1 0.1 0.1], ...
-        'YColor',     [0.1 0.1 0.1]);
-    grid(ax, 'off');
-    xlabel(ax, 't  (s)', 'FontSize', 14);
-    ylabel(ax, ylab,     'FontSize', 14);
+        xline(ax, 0, '--', 'Color', [0.2 0.2 0.2], 'LineWidth', 1, 'HandleVisibility', 'off');
+    
+        if ~strcmp(legendLoc, 'none')
+            legend(ax, 'show', 'Location', legendLoc, 'FontSize', 11, 'Box', 'off');
+        else
+            lgd          = legend(ax, 'show', 'FontSize', 10, 'Box', 'off');
+            lgd.Location = 'none';
+            lgd.Position = [0.84 0.28 0.14 0.50];
+        end
+    
+        set(ax, 'FontSize',   13,  'Box',        'on', ...
+                'LineWidth',  1.2, 'XColor',     [0 0 0], ...
+                'YColor',     [0 0 0], ...
+                'XMinorTick', 'on', 'YMinorTick', 'on', ...
+                'TickDir',    'in');
+        grid(ax, 'off');
+        xlabel(ax, '$t$  (s)', 'FontSize', 16, 'Interpreter', 'latex', 'Color', [0 0 0]);
+        ylabel(ax, ylab,       'FontSize', 16, 'Interpreter', 'latex', 'Color', [0 0 0]);
 end

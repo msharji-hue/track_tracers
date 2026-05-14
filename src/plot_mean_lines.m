@@ -57,9 +57,13 @@ function ax = plot_mean_lines(heights, field, ylab, cmap, varargin)
     lgd          = legend(ax, 'show', 'FontSize', 10, 'Box', 'off');
     lgd.Location = 'none';
     lgd.Position = [0.84 0.30 0.14 0.50];
-    set(ax, 'FontSize', 13, 'Box', 'on', 'LineWidth', 1.2, ...
-        'XColor', [0.1 0.1 0.1], 'YColor', [0.1 0.1 0.1]);
+
+    set(ax, 'FontSize',   13,  'Box',        'on', ...
+            'LineWidth',  1.2, 'XColor',     [0 0 0], ...
+            'YColor',     [0 0 0], ...
+            'XMinorTick', 'on', 'YMinorTick', 'on', ...
+            'TickDir',    'in');
     grid(ax, 'off');
-    xlabel(ax, 't  (s)', 'FontSize', 14);
-    ylabel(ax, ylab,     'FontSize', 14);
+    xlabel(ax, '$t$  (s)', 'FontSize', 16, 'Interpreter', 'latex', 'Color', [0 0 0]);
+    ylabel(ax, ylab,       'FontSize', 16, 'Interpreter', 'latex', 'Color', [0 0 0]);
 end
