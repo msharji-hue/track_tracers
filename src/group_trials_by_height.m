@@ -14,8 +14,8 @@ function heights = group_trials_by_height(trials)
 %       d_final_cm     - all d_final values [1 x nTrials]
 
     % Standard heights: 6" through 18" in 2" steps
-    standardH = [15.24, 20.32, 25.40, 30.48, 35.56, 40.64, 45.72];
-
+   standardH = [7.62, 10.16, 12.70, 15.24, 17.78, 20.32, 22.86, ...
+             25.40, 27.94, 30.48, 33.02, 35.56, 38.10, 40.64, 43.18, 45.72];
     % Snap each trial to nearest standard height
     for i = 1:numel(trials)
         [~, idx]       = min(abs(trials(i).h_cm - standardH));
