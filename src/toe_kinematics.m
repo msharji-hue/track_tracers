@@ -73,8 +73,8 @@ function [t_s, depthRod_cm, z_smooth, v_smooth, a_smooth, ...
     a_smooth(validIdx) = a_filt;
 
     % ── Stop frame ────────────────────────────────────────────────────────
-    postImpact = v_smooth(impact_index:end);
-    stopIdx    = find(postImpact <= 0, 1, 'first');
+    postImpact_ag = kinematics.a_plus_g(impact_index:end);
+    stopIdx = find(postImpact_ag <= 0, 1, 'first');
     if isempty(stopIdx)
         stopFrame = nFrames;
         warning('Stop frame not found — using last frame.');

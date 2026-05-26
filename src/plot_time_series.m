@@ -67,8 +67,9 @@ function [ax, peakVals] = plot_time_series(heights, field, scalarField, ...
     end
 
     % ── Axes formatting ───────────────────────────────────────────────────
-        xline(ax, 0, '--', 'Color', [0.2 0.2 0.2], 'LineWidth', 1, 'HandleVisibility', 'off');
     
+        xline(ax, 0, '--', 'Color', [0.15 0.15 0.15], 'LineWidth', 1.4, 'HandleVisibility', 'off');    
+        
         if ~strcmp(legendLoc, 'none')
             legend(ax, 'show', 'Location', legendLoc, 'FontSize', 11, 'Box', 'off');
         else

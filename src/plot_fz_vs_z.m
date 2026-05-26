@@ -1,4 +1,4 @@
-function fig = plot_fz_vs_z(heights, d1, cmap)
+function [fig, k_over_m] = plot_fz_vs_z(heights, d1, cmap)
 % PLOT_FZ_VS_Z  Plot F(z)/m = a+g - v²/d1 vs z for all trials.
 %
 %   This is the direct test of the Katsuragi friction term k|z|.
