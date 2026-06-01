@@ -84,108 +84,37 @@ ylabel(ax3,'$a+g$  (cm s$^{-2}$)','FontSize',16,'Interpreter','latex','Color',[0
 %% ── FIGURE 4: Normalized collapse ────────────────────────────────────────
 fig4 = plot_normalized_collapse(heights, cmap);
 
-%% ── FIGURE 5: a+g vs v² — extracts d1_kinematic ─────────────────────────
+%% ── FIGURE 5: a+g vs v² — extracts d1_kinematic (Katsuragi Fig. 3a) ─────
 z_targets = [1.0, 1.3, 1.6, 1.9, 2.2];
-[fig5, d1_kinematic, ~, fitStats] = plot_ag_vs_v2(heights, cmap, z_targets, 40);
 
-%% ── FIGURE 6: F(z)/m vs z ────────────────────────────────────────────────
-[fig6, k_over_m] = plot_fz_vs_z(heights, d1_kinematic, cmap, ...
-                                  fitStats.Fz_over_m, fitStats.z_targets);
+[fig5, d1_kinematic, Fz_over_m, fitStats] = ...
+    plot_ag_vs_v2(heights, cmap, z_targets, 40);
+
+fprintf('d1 = %.3f cm  |  R2 = %.4f\n', ...
+    d1_kinematic, fitStats.r2);
+
+%% ── FIGURE 6: d vs v0 — extracts d0 (Katsuragi Fig. 2b) ─────────────────
+[fig6, d0] = plot_depth_vs_v0(heights, cmap);
+
+fprintf('d0 = %.3f cm\n', d0);
+
+
+%% ── FIGURE 7: F(z)/m vs z — extracts k_over_m (Katsuragi Fig. 3b) ───────
+[fig7, k_over_m, fitStatsFz] = plot_fz_vs_z(heights, d1_kinematic, cmap, ...
+    Fz_over_m, fitStats.z_targets, d0, fitStats.Fz_over_m_se);
 
 fprintf('k/m = %.1f s^-2\n', k_over_m);
-%% ── STL area extraction (needed for Fig 7) ───────────────────────────────
-out = extract_foot_area_vs_depth('jerboa_foot_model_rectangularbeam.stl', ...
-    'alpha', 1.5, 'gamma', 0.3);
+ 
+%% ── FIGURE 8: t_stop vs v0 — characteristic time scale ──────────────────
+[fig8, stats8] = plot_tstop_vs_v0(heights, cmap, ...
+    'stlFile', 'jerboa_foot_model_rectangularbeam.stl', ...
+    'alpha', 1.5);
 
-%% ── FIGURE 7: d vs v0 with forward model ────────────────────────────────
-fig7 = plot_depth_vs_v0(heights, cmap, out, d1_kinematic, k_over_m);
-
-%% ── FIGURE 8: t_stop vs v0 ──────────────────────────────────────────────
-fig8 = figure('Name','t_stop vs v0','ToolBar','none','MenuBar','none');
-fig8.Position = [100 100 540 440];
-ax8 = axes(fig8, 'Position', [0.14 0.13 0.78 0.82]);
-hold(ax8, 'on');
-for j = 1:nH
-    hg = heights(j);
-    [~, marker] = get_height_style(hg.h_cm);
-    errorbar(ax8, hg.v0_mean, hg.tstop_mean*1000, ...
-        hg.tstop_std*1000, hg.tstop_std*1000, hg.v0_std, hg.v0_std, marker, ...
-        'Color', cmap(j,:), 'MarkerFaceColor','none', ...
-        'MarkerEdgeColor', cmap(j,:), 'MarkerSize', 9, 'LineWidth', 1.8, ...
-        'HandleVisibility', 'off');
-end
-set(ax8,'FontSize',13,'Box','on','LineWidth',1.2, ...
-    'XColor',[0 0 0],'YColor',[0 0 0], ...
-    'XMinorTick','on','YMinorTick','on','TickDir','in');
-grid(ax8,'off');
-xlabel(ax8,'$v_0$  (cm s$^{-1}$)','FontSize',16,'Interpreter','latex','Color',[0 0 0]);
-ylabel(ax8,'$t_\mathrm{stop}$  (ms)','FontSize',16,'Interpreter','latex','Color',[0 0 0]);
-add_h_colorbar(ax8, hVals, cmap);
-
-%% ── FIGURE 9: log(a+g) vs log(v) ────────────────────────────────────────
-fig9 = figure('Name','log(a+g) vs log(v)','ToolBar','none','MenuBar','none');
-fig9.Position = [100 100 580 460];
-ax9 = axes(fig9, 'Position', [0.14 0.13 0.76 0.82]);
-hold(ax9, 'on');
-for j = 1:nH
-    for i = 1:heights(j).nTrials
-        k   = heights(j).trials(i).kinematics;
-        idx = k.impact_index:k.stopFrame;
-        v   = k.v_smooth(idx);
-        ag  = k.a_plus_g(idx);
-        ok  = isfinite(v) & isfinite(ag) & v > 0 & ag > 0;
-        plot(ax9, v(ok), ag(ok), '.', 'Color', [cmap(j,:), 0.40], ...
-            'MarkerSize', 4, 'HandleVisibility', 'off');
-    end
-end
-v_ref = logspace(0, log10(max([heights.v0_mean])*1.1), 100);
-plot(ax9, v_ref, v_ref.^2 / d1_kinematic, 'k--', 'LineWidth', 1.5, ...
-    'DisplayName', '$v^2/d_1$  [inertial only]');
-set(ax9,'XScale','log','YScale','log','FontSize',13,'Box','on', ...
-    'LineWidth',1.2,'XColor',[0 0 0],'YColor',[0 0 0], ...
-    'XMinorTick','on','YMinorTick','on','TickDir','in');
-grid(ax9,'off');
-xlabel(ax9,'$v$  (cm s$^{-1}$)','FontSize',16,'Interpreter','latex','Color',[0 0 0]);
-ylabel(ax9,'$a+g$  (cm s$^{-2}$)','FontSize',16,'Interpreter','latex','Color',[0 0 0]);
-legend(ax9,'show','FontSize',11,'Interpreter','latex','Box','off','Location','northwest');
-text(ax9, 0.05, 0.92, sprintf('$d_1 = %.2f$ cm', d1_kinematic), ...
-    'Units','normalized','Interpreter','latex','FontSize',11, ...
-    'VerticalAlignment','top','Color',[0.15 0.15 0.15], ...
-    'BackgroundColor',[1 1 1],'EdgeColor',[0.25 0.25 0.25],'Margin',4);
-text(ax9, 0.97, 0.06, {'slope $= 2$ $\Rightarrow$ pure $v^2$ drag', ...
-    'slope $< 2$ $\Rightarrow$ friction contributes'}, ...
-    'Units','normalized','Interpreter','latex','FontSize',10, ...
-    'HorizontalAlignment','right','Color',[0.25 0.25 0.25]);
-add_h_colorbar(ax9, hVals, cmap);
-
-%% ── FIGURE 10: v² vs z semi-log ─────────────────────────────────────────
-fig10 = figure('Name','v^2 vs z','ToolBar','none','MenuBar','none');
-fig10.Position = [100 100 580 460];
-ax10 = axes(fig10, 'Position', [0.14 0.13 0.76 0.82]);
-hold(ax10, 'on');
-for j = 1:nH
-    for i = 1:heights(j).nTrials
-        k   = heights(j).trials(i).kinematics;
-        idx = k.impact_index:k.stopFrame;
-        z   = k.z_smooth(idx);
-        v2  = k.v_smooth(idx).^2;
-        ok  = isfinite(z) & isfinite(v2) & v2 > 0;
-        plot(ax10, z(ok), v2(ok), '-', 'Color', [cmap(j,:), 0.55], 'LineWidth', 1.2, ...
-            'HandleVisibility', 'off');
-    end
-end
-set(ax10,'YScale','log','FontSize',13,'Box','on','LineWidth',1.2, ...
-    'XColor',[0 0 0],'YColor',[0 0 0], ...
-    'XMinorTick','on','YMinorTick','on','TickDir','in');
-grid(ax10,'off');
-xlabel(ax10,'$z$  (cm)','FontSize',16,'Interpreter','latex','Color',[0 0 0]);
-ylabel(ax10,'$v^2$  (cm$^2$ s$^{-2}$)','FontSize',16,'Interpreter','latex','Color',[0 0 0]);
-text(ax10, 0.05, 0.10, {'Straight line $=$ pure inertial decay', ...
-    sprintf('slope $\\approx -2/d_1 = %.2f$ cm$^{-1}$', 2/d1_kinematic)}, ...
-    'Units','normalized','Interpreter','latex','FontSize',10, ...
-    'Color',[0.25 0.25 0.25],'VerticalAlignment','bottom');
-add_h_colorbar(ax10, hVals, cmap);
-
+fprintf('A_ref = %.4f cm^2\n', stats8.A_ref_cm2);
+fprintf('D_eff = %.3f cm\n', stats8.D_eff_cm);
+fprintf('Vc    = %.2f cm/s\n', stats8.Vc_cm_s);
+fprintf('Tc    = %.4f s\n', stats8.Tc_s);
+ 
 %% ── CLEAN MEAN-LINE PLOTS ────────────────────────────────────────────────
 fig_z_clean  = plot_mean_lines(heights, 'z_smooth',  '$z$  (cm)',             cmap);
 fig_v_clean  = plot_mean_lines(heights, 'v_smooth',  '$v$  (cm s$^{-1}$)',   cmap, ...
@@ -196,8 +125,8 @@ for f = [fig_z_clean fig_v_clean fig_ag_clean]
     legend(f.CurrentAxes, 'off');
 end
 
-%% ── EXAMPLE TRIALS: low / mid / high v0 ─────────────────────────────────
 [fig_ex_z, fig_ex_v, fig_ex_ag] = plot_example_trials(heights, cmap);
+
 
 %% ── SAVE ─────────────────────────────────────────────────────────────────
 outDir = uigetdir(pwd, 'Select folder to save figures');
