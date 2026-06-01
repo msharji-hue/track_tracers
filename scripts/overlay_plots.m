@@ -57,12 +57,11 @@ fig3.Position = [100 100 980 520];
 ax3 = axes(fig3, 'Position', [0.10 0.13 0.74 0.82]);
 hold(ax3, 'on');
 for j = 1:nH
-    [~, marker] = get_height_style(heights(j).h_cm);
     for i = 1:heights(j).nTrials
         k        = heights(j).trials(i).kinematics;
         idx_plot = k.impact_index:5:k.stopFrame;
-        plot(ax3, k.t_s(idx_plot), k.a_plus_g(idx_plot), marker, ...
-            'Color', [0 0 0 0.25], 'MarkerSize', 3, ...
+        plot(ax3, k.t_s(idx_plot), k.a_plus_g(idx_plot), '.', ...
+            'Color', [cmap(j,:), 0.20], 'MarkerSize', 4, ...
             'LineStyle', 'none', 'HandleVisibility', 'off');
     end
 end
@@ -75,7 +74,9 @@ end
 set(ax3, 'FontSize',13,'Box','on','LineWidth',1.2, ...
     'XColor',[0 0 0],'YColor',[0 0 0], ...
     'XMinorTick','on','YMinorTick','on','TickDir','in', ...
-    'XLim',[0 ax3.XLim(2)],'YLim',[0 ax3.YLim(2)]);
+    'XLim',[0 ax3.XLim(2)]);
+yline(ax3, 0, 'k-', 'LineWidth', 1.8, 'HandleVisibility', 'off');
+ylim([0 ax3.YLim(2)]);
 grid(ax3,'off');
 xlabel(ax3,'$t$  (s)','FontSize',16,'Interpreter','latex','Color',[0 0 0]);
 ylabel(ax3,'$a+g$  (cm s$^{-2}$)','FontSize',16,'Interpreter','latex','Color',[0 0 0]);
@@ -84,13 +85,14 @@ ylabel(ax3,'$a+g$  (cm s$^{-2}$)','FontSize',16,'Interpreter','latex','Color',[0
 fig4 = plot_normalized_collapse(heights, cmap);
 
 %% ── FIGURE 5: a+g vs v² — extracts d1_kinematic ─────────────────────────
-z_targets = [1.30 1.70 2.00];
+z_targets = [1.0, 1.3, 1.6, 1.9, 2.2];
+[fig5, d1_kinematic, ~, fitStats] = plot_ag_vs_v2(heights, cmap, z_targets, 40);
 
-[fig_1b, d1_1b, Fz_1b, stats_1b] = plot_ag_vs_v2(heights, cmap, z_targets);
-%% ── FIGURE 6: F(z)/m vs z — extracts k_over_m ───────────────────────────
-[fig6, k_over_m] = plot_fz_vs_z(heights, d1_kinematic, cmap);
+%% ── FIGURE 6: F(z)/m vs z ────────────────────────────────────────────────
+[fig6, k_over_m] = plot_fz_vs_z(heights, d1_kinematic, cmap, ...
+                                  fitStats.Fz_over_m, fitStats.z_targets);
+
 fprintf('k/m = %.1f s^-2\n', k_over_m);
-
 %% ── STL area extraction (needed for Fig 7) ───────────────────────────────
 out = extract_foot_area_vs_depth('jerboa_foot_model_rectangularbeam.stl', ...
     'alpha', 1.5, 'gamma', 0.3);
@@ -194,15 +196,18 @@ for f = [fig_z_clean fig_v_clean fig_ag_clean]
     legend(f.CurrentAxes, 'off');
 end
 
+%% ── EXAMPLE TRIALS: low / mid / high v0 ─────────────────────────────────
+[fig_ex_z, fig_ex_v, fig_ex_ag] = plot_example_trials(heights, cmap);
+
 %% ── SAVE ─────────────────────────────────────────────────────────────────
 outDir = uigetdir(pwd, 'Select folder to save figures');
 if outDir ~= 0
     allFigs  = {fig1, fig2, fig3, fig4, fig5, fig6, fig7, fig8, fig9, fig10, ...
-                fig_z_clean, fig_v_clean, fig_ag_clean};
+                fig_z_clean, fig_v_clean, fig_ag_clean, fig_ex_z, fig_ex_v, fig_ex_ag};
     allNames = {'z_vs_t', 'v_vs_t', 'aplusg_vs_t', 'normalized_collapse', ...
                 'ag_vs_v2', 'fz_vs_z', 'd_vs_v0', 'tstop_vs_v0', ...
                 'logag_vs_logv', 'v2_vs_z', ...
-                'z_vs_t_clean', 'v_vs_t_clean', 'aplusg_vs_t_clean'};
+                'z_vs_t_clean', 'v_vs_t_clean', 'aplusg_vs_t_clean','example_z', 'example_v', 'example_ag'};
     save_all_figures(allFigs, allNames, outDir);
     save_analysis(heights, hVals, cmap, outDir);
 end

@@ -37,7 +37,7 @@ lineC = bedPoint1(1)*bedPoint2(2) - bedPoint2(1)*bedPoint1(2);
 
 % ── Timing ────────────────────────────────────────────────────────────────
 outputFps  = 30;
-slowFactor = 3;      % each frame written this many times
+slowFactor = 2;      % each frame written this many times
 preFrames  = round(det.meta.fps_export * 0.008);   % 8ms before impact
 postFrames = round(det.meta.fps_export * 0.010);   % 10ms after stop
 

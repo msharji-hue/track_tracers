@@ -1,6 +1,6 @@
 function [ax, peakVals] = plot_time_series(heights, field, scalarField, ...
                                             scaleFactor, figName, ylab, legendLoc, cmap)
-% PLOT_TIME_SERIES  Raw dots + shaded mean ± 1 std band for any kinematics
+% PLOT_TIME_SERIES  Raw dots + shaded mean ± std band for any kinematics
 %   field vs physical time. Used for z vs t, v vs t, a+g vs t overlays.
 %
 %   Inputs:
@@ -20,27 +20,33 @@ function [ax, peakVals] = plot_time_series(heights, field, scalarField, ...
     if nargin < 8, cmap = []; end
 
     fig = figure('Name', figName);
-    fig.Position = [100 100 980 520];              % wider for outside legend
+    fig.Position = [100 100 980 520];
     ax  = axes(fig, 'Position', [0.08 0.11 0.74 0.82]);
     hold(ax, 'on');
 
-    % ── Raw dots (per height shape, subsampled every 5 frames) ───────────
+    % ── Raw dots: uniform '.' colored by height group, low opacity ────────
     for j = 1:numel(heights)
-        [~, marker] = get_height_style(heights(j).h_cm);
+
+        if ~isempty(cmap)
+            col = cmap(j,:);
+        else
+            col = get_height_style(heights(j).h_cm);
+        end
+
         for i = 1:heights(j).nTrials
             k        = heights(j).trials(i).kinematics;
             idx_plot = 1:5:k.stopFrame;
-            plot(ax, k.t_s(idx_plot), ...
-                 k.(field)(idx_plot), marker, ...
-                 'Color',            [0 0 0 0.35], ...
-                 'MarkerSize',       4, ...
-                 'LineStyle',        'none', ...
-                 'HandleVisibility', 'off');
+            plot(ax, k.t_s(idx_plot), k.(field)(idx_plot), '.', ...
+                'Color',            [col, 0.20], ...
+                'MarkerSize',       4, ...
+                'LineStyle',        'none', ...
+                'HandleVisibility', 'off');
         end
     end
 
-    % ── Shaded mean ± 1 std band ─────────────────────────────────────────
+    % ── Shaded mean ± 0.5 std band (symmetric) ────────────────────────────
     peakVals = struct();
+
     for j = 1:numel(heights)
         hg = heights(j);
 
@@ -67,23 +73,23 @@ function [ax, peakVals] = plot_time_series(heights, field, scalarField, ...
     end
 
     % ── Axes formatting ───────────────────────────────────────────────────
-    
-        xline(ax, 0, '--', 'Color', [0.15 0.15 0.15], 'LineWidth', 1.4, 'HandleVisibility', 'off');    
-        
-        if ~strcmp(legendLoc, 'none')
-            legend(ax, 'show', 'Location', legendLoc, 'FontSize', 11, 'Box', 'off');
-        else
-            lgd          = legend(ax, 'show', 'FontSize', 10, 'Box', 'off');
-            lgd.Location = 'none';
-            lgd.Position = [0.84 0.28 0.14 0.50];
-        end
-    
-        set(ax, 'FontSize',   13,  'Box',        'on', ...
-                'LineWidth',  1.2, 'XColor',     [0 0 0], ...
-                'YColor',     [0 0 0], ...
-                'XMinorTick', 'on', 'YMinorTick', 'on', ...
-                'TickDir',    'in');
-        grid(ax, 'off');
-        xlabel(ax, '$t$  (s)', 'FontSize', 16, 'Interpreter', 'latex', 'Color', [0 0 0]);
-        ylabel(ax, ylab,       'FontSize', 16, 'Interpreter', 'latex', 'Color', [0 0 0]);
+    xline(ax, 0, '--', 'Color', [0.15 0.15 0.15], 'LineWidth', 1.4, ...
+        'HandleVisibility', 'off');
+
+    if ~strcmp(legendLoc, 'none')
+        legend(ax, 'show', 'Location', legendLoc, 'FontSize', 11, 'Box', 'off');
+    else
+        lgd          = legend(ax, 'show', 'FontSize', 10, 'Box', 'off');
+        lgd.Location = 'none';
+        lgd.Position = [0.84 0.28 0.14 0.50];
+    end
+
+    set(ax, 'FontSize',   13,  'Box',        'on', ...
+            'LineWidth',  1.2, 'XColor',     [0 0 0], ...
+            'YColor',     [0 0 0], ...
+            'XMinorTick', 'on', 'YMinorTick', 'on', ...
+            'TickDir',    'in');
+    grid(ax, 'off');
+    xlabel(ax, '$t$  (s)', 'FontSize', 16, 'Interpreter', 'latex', 'Color', [0 0 0]);
+    ylabel(ax, ylab,       'FontSize', 16, 'Interpreter', 'latex', 'Color', [0 0 0]);
 end
