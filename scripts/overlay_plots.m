@@ -94,39 +94,43 @@ fprintf('d1 = %.3f cm  |  R2 = %.4f\n', ...
     d1_kinematic, fitStats.r2);
 
 %% ── FIGURE 6: d vs v0 — extracts d0 (Katsuragi Fig. 2b) ─────────────────
-[fig6, d0] = plot_depth_vs_v0(heights, cmap);
-
+[fig6, d0] = plot_depth_vs_v0(heights, cmap, [], d1_kinematic);
 fprintf('d0 = %.3f cm\n', d0);
 
-
 %% ── FIGURE 7: F(z)/m vs z — extracts k_over_m (Katsuragi Fig. 3b) ───────
-[fig7, k_over_m, fitStatsFz] = plot_fz_vs_z(heights, d1_kinematic, cmap, ...
-    Fz_over_m, fitStats.z_targets, d0, fitStats.Fz_over_m_se);
+z_targets_7 = 0.10 : 0.10 : 2.2;   % 22 depths, starts near surface
 
+[Fz7, Fz7_se, v0_7, Fz7_pooled] = compute_fz_intercepts( ...
+    heights, d1_kinematic, z_targets_7, 40, 0.07);
+
+[fig7, k_over_m, fitStatsFz] = plot_fz_vs_z(heights, d1_kinematic, cmap, ...
+    Fz7_pooled, z_targets_7(:), d0, [], Fz7, Fz7_se, v0_7);
 fprintf('k/m = %.1f s^-2\n', k_over_m);
- 
+%% ── FIGURE 6b: d vs v0 with forward model overlay ───────────────────────
+[fig6b, ~] = plot_depth_vs_v0(heights, cmap, [], d1_kinematic, k_over_m);
+
 %% ── FIGURE 8: t_stop vs v0 — characteristic time scale ──────────────────
 [fig8, stats8] = plot_tstop_vs_v0(heights, cmap, ...
     'stlFile', 'jerboa_foot_model_rectangularbeam.stl', ...
     'alpha', 1.5);
 
 fprintf('A_ref = %.4f cm^2\n', stats8.A_ref_cm2);
-fprintf('D_eff = %.3f cm\n', stats8.D_eff_cm);
+fprintf('D_eff = %.3f cm  (convex-hull equivalent diameter)\n', stats8.D_eff_cm);
+fprintf('Lc    = %.3f cm  (length scale used for guide lines)\n', stats8.Lc_cm);
 fprintf('Vc    = %.2f cm/s\n', stats8.Vc_cm_s);
 fprintf('Tc    = %.4f s\n', stats8.Tc_s);
- 
+
 %% ── CLEAN MEAN-LINE PLOTS ────────────────────────────────────────────────
-fig_z_clean  = plot_mean_lines(heights, 'z_smooth',  '$z$  (cm)',             cmap);
-fig_v_clean  = plot_mean_lines(heights, 'v_smooth',  '$v$  (cm s$^{-1}$)',   cmap, ...
-                   'yline', true, 'v0marks', true);
+fig_z_clean  = plot_mean_lines(heights, 'z_smooth',  '$z$  (cm)',           cmap);
+fig_v_clean  = plot_mean_lines(heights, 'v_smooth',  '$v$  (cm s$^{-1}$)', cmap, ...
+    'yline', true, 'v0marks', true);
 fig_ag_clean = plot_mean_lines(heights, 'a_plus_g',  '$a+g$  (cm s$^{-2}$)', cmap, ...
-                   'xlim0', true, 'ylim0', true);
+    'xlim0', true, 'ylim0', true);
 for f = [fig_z_clean fig_v_clean fig_ag_clean]
     legend(f.CurrentAxes, 'off');
 end
 
 [fig_ex_z, fig_ex_v, fig_ex_ag] = plot_example_trials(heights, cmap);
-
 
 %% ── SAVE ─────────────────────────────────────────────────────────────────
 outDir = uigetdir(pwd, 'Select folder to save figures');
