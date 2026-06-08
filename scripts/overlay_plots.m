@@ -81,34 +81,77 @@ grid(ax3,'off');
 xlabel(ax3,'$t$  (s)','FontSize',16,'Interpreter','latex','Color',[0 0 0]);
 ylabel(ax3,'$a+g$  (cm s$^{-2}$)','FontSize',16,'Interpreter','latex','Color',[0 0 0]);
 
-%% ── FIGURE 4: Normalized collapse ────────────────────────────────────────
-fig4 = plot_normalized_collapse(heights, cmap);
+%% ── FIGURE 5 + Steps 1/2/3 shared computation ───────────────────────────
+z_targets_all = (0.10 : 0.10 : 2.2)';
+z_display     = [1.3, 1.5, 1.7, 1.9, 2.1]';
 
-%% ── FIGURE 5: a+g vs v² — extracts d1_kinematic (Katsuragi Fig. 3a) ─────
-z_targets = [1.0, 1.3, 1.6, 1.9, 2.2];
+%% ── FIGURE 4a: Normalized collapse (linear axes) ────────────────────────
+fig4a = plot_normalized_collapse(heights, cmap);
 
-[fig5, d1_kinematic, Fz_over_m, fitStats] = ...
-    plot_ag_vs_v2(heights, cmap, z_targets, 40);
+%% ── FIGURE 4b: Power-law proof (log-log) ────────────────────────────────
+% Runs after d1 and k_over_m are available — place after fig7 call.
+% Declared here; called after fig7 below.
 
-fprintf('d1 = %.3f cm  |  R2 = %.4f\n', ...
-    d1_kinematic, fitStats.r2);
+%% ── FIGURE 5: a+g vs v ───────────────────────────────────────────────────
+[fig5, d1_kinematic, Fz_over_m, fitStats5] = ...
+    plot_ag_vs_v2(heights, cmap, z_targets_all, z_display, 40);
 
-%% ── FIGURE 6: d vs v0 — extracts d0 (Katsuragi Fig. 2b) ─────────────────
+fprintf('d1 = %.3f cm  (CV = %.1f%%)\n', d1_kinematic, fitStats5.d1_cv);
+
+%% ── FIGURE 6: d vs v0 ────────────────────────────────────────────────────
 [fig6, d0] = plot_depth_vs_v0(heights, cmap, [], d1_kinematic);
 fprintf('d0 = %.3f cm\n', d0);
 
-%% ── FIGURE 7: F(z)/m vs z — extracts k_over_m (Katsuragi Fig. 3b) ───────
-z_targets_7 = 0.10 : 0.10 : 2.2;   % 22 depths, starts near surface
+%% ── Load STL foot area ───────────────────────────────────────────────────
+stlMatFile = fullfile('/Users/muhannadalsharji/Documents/track_tracers/data', ...
+    'jerboa_foot_model_rectangularbeam_area_profile.mat');
+if exist(stlMatFile, 'file')
+    tmp      = load(stlMatFile, 'out');
+    footArea = tmp.out;
+    fprintf('Loaded STL area profile: %d depth levels\n', numel(footArea.depth_cm));
+else
+    fprintf('STL area profile not found — Steps 2 and 3 figures skipped.\n');
+    footArea = [];
+end
 
-[Fz7, Fz7_se, v0_7, Fz7_pooled] = compute_fz_intercepts( ...
-    heights, d1_kinematic, z_targets_7, 40, 0.07);
+%% ── FIGURE 7  (Step 1): F(z)/m vs z ─────────────────────────────────────
+[fig7, k_over_m, fitStats7] = plot_fz_vs_z( ...
+    heights, d1_kinematic, cmap, ...
+    z_targets_all, fitStats5.Fz_over_m, ...
+    fitStats5.Fz_per_height, fitStats5.Fz_per_height_se, ...
+    fitStats5.v0_per_height, d0);
 
-[fig7, k_over_m, fitStatsFz] = plot_fz_vs_z(heights, d1_kinematic, cmap, ...
-    Fz7_pooled, z_targets_7(:), d0, [], Fz7, Fz7_se, v0_7);
-fprintf('k/m = %.1f s^-2\n', k_over_m);
+fprintf('k/m = %.1f s^-2  |  R2 = %.4f\n', k_over_m, fitStats7.r2_lin);
+
+%% ── FIGURE 4b: Power-law collapse — placed here so d1 and k/m are ready ──
+fig4b = plot_power_law_collapse(heights, cmap, d1_kinematic, k_over_m);
+
+%% ── FIGURE 7b (Step 2): F(z)/m vs V_hull(z) ─────────────────────────────
+% SE_plot from fitStats7 provides OLS-based SE at all 22 depths —
+% ensures pre-stable symbols have vertical error bars too.
+fig7b = [];
+if ~isempty(footArea)
+    [fig7b, fitStats7b] = plot_fz_vs_V( ...
+        z_targets_all, fitStats5.Fz_over_m, fitStats7.SE_plot, ...
+        d1_kinematic, footArea);
+    fprintf('Kang slope = %.1f  K_eff = %.1f  R2 = %.4f\n', ...
+        fitStats7b.slope_fit, fitStats7b.K_eff, fitStats7b.r2_fit);
+end
+
+%% ── FIGURE 7c (Step 3): F(z)/m vs A(z)*z ────────────────────────────────
+fig7c = [];
+if ~isempty(footArea)
+    [fig7c, fitStats7c] = plot_fz_vs_Az( ...
+        z_targets_all, fitStats5.Fz_over_m, fitStats7.SE_plot, ...
+        d1_kinematic, k_over_m, footArea);
+    fprintf('A(z)*z linear: C=%.1f  K_eff=%.1f  R2=%.4f\n', ...
+        fitStats7c.C_lin, fitStats7c.K_eff, fitStats7c.r2_lin);
+    fprintf('A(z)*z power:  C=%.1f  p=%.2f  R2=%.4f\n', ...
+        fitStats7c.C_pow, fitStats7c.p_pow, fitStats7c.r2_pow);
+end
+
 %% ── FIGURE 6b: d vs v0 with forward model overlay ───────────────────────
 [fig6b, ~] = plot_depth_vs_v0(heights, cmap, [], d1_kinematic, k_over_m);
-
 %% ── FIGURE 8: t_stop vs v0 — characteristic time scale ──────────────────
 [fig8, stats8] = plot_tstop_vs_v0(heights, cmap, ...
     'stlFile', 'jerboa_foot_model_rectangularbeam.stl', ...
@@ -135,12 +178,21 @@ end
 %% ── SAVE ─────────────────────────────────────────────────────────────────
 outDir = uigetdir(pwd, 'Select folder to save figures');
 if outDir ~= 0
-    allFigs  = {fig1, fig2, fig3, fig4, fig5, fig6, fig7, fig8, fig9, fig10, ...
-                fig_z_clean, fig_v_clean, fig_ag_clean, fig_ex_z, fig_ex_v, fig_ex_ag};
+    % Collect valid figure handles (fig7b may be empty if footArea missing)
+    allFigs  = {fig1, fig2, fig3, fig4, fig5, fig6, fig6b, fig7};
     allNames = {'z_vs_t', 'v_vs_t', 'aplusg_vs_t', 'normalized_collapse', ...
-                'ag_vs_v2', 'fz_vs_z', 'd_vs_v0', 'tstop_vs_v0', ...
-                'logag_vs_logv', 'v2_vs_z', ...
-                'z_vs_t_clean', 'v_vs_t_clean', 'aplusg_vs_t_clean','example_z', 'example_v', 'example_ag'};
+                'ag_vs_v2', 'd_vs_v0', 'd_vs_v0_fwd', 'fz_vs_z'};
+
+    if ~isempty(fig7b)
+        allFigs{end+1}  = fig7b;
+        allNames{end+1} = 'fz_vs_V';
+    end
+
+    allFigs  = [allFigs,  {fig_z_clean, fig_v_clean, fig_ag_clean, ...
+                            fig_ex_z, fig_ex_v, fig_ex_ag}];
+    allNames = [allNames, {'z_vs_t_clean', 'v_vs_t_clean', 'aplusg_vs_t_clean', ...
+                            'example_z', 'example_v', 'example_ag'}];
+
     save_all_figures(allFigs, allNames, outDir);
     save_analysis(heights, hVals, cmap, outDir);
 end
