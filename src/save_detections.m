@@ -1,7 +1,13 @@
 function det = save_detections(detectOut, saveInfo)
 % SAVE_DETECTIONS  Save detection results to .mat and .csv.
 
-baseName = sprintf('%s_T%02d', saveInfo.heightLabel, saveInfo.trialNum);
+% Prefer an explicit, self-describing trialTag (e.g. '25mm_T01_shallow')
+% when provided; otherwise fall back to the original heightLabel_TNN scheme.
+if isfield(saveInfo, 'trialTag') && ~isempty(saveInfo.trialTag)
+    baseName = saveInfo.trialTag;
+else
+    baseName = sprintf('%s_T%02d', saveInfo.heightLabel, saveInfo.trialNum);
+end
 outMat   = fullfile(saveInfo.detDir, [baseName '_detections.mat']);
 outCsv   = fullfile(saveInfo.detDir, [baseName '_detections.csv']);
 

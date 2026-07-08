@@ -1,229 +1,229 @@
 function [fig, stats] = plot_tstop_vs_v0(heights, cmap, varargin)
 % PLOT_TSTOP_VS_V0  Stopping time vs impact speed.
+%   Replicates Katsuragi & Durian 2007 Fig. 1b inset.
 %
-%   Matches the style/logic of Katsuragi & Durian Fig. 1b inset:
-%       t_stop vs v0
-%       characteristic velocity scale sqrt(D_eff*g)
-%       characteristic time scale sqrt(D_eff/g)
+%   Key additions vs original:
+%     1. Forward model t_stop prediction (black dotted) — requires d1, k_over_m
+%     2. D_eff computed from stable-shaft A_hull only (z >= 1.30 cm)
+%        matching the regime where d1 and k/m are calibrated
 %
-%   For a sphere, Katsuragi uses projectile diameter Db.
-%   For the jerboa-foot model, this function estimates an equivalent
-%   characteristic size from the bare printed STL area:
+%   Characteristic scales:
+%     Lc  = D_eff = sqrt(4*A_hull_stable_mean/pi)
+%     Vc  = sqrt(Lc*g)  — velocity scale
+%     Tc  = sqrt(Lc/g)  — time scale
 %
-%       D_eff = sqrt(4*A_bare_ref/pi)
+%   For Katsuragi sphere: Lc = Db = 2.54 cm, Vc = 49.9 cm/s, Tc = 0.051 s
 %
 %   Usage:
-%       [fig8, stats8] = plot_tstop_vs_v0(heights, cmap);
-%
-%       [fig8, stats8] = plot_tstop_vs_v0(heights, cmap, ...
-%           'stlFile', 'jerboa_foot_model_rectangularbeam.stl');
-%
-%       [fig8, stats8] = plot_tstop_vs_v0(heights, cmap, ...
-%           'footArea', out);
+%     [fig8, stats8] = plot_tstop_vs_v0(heights, cmap, ...
+%         'footArea', footArea, 'd1', d1_kinematic, 'k_over_m', k_over_m);
 %
 %   Name-value options:
-%       'footArea'       - output from extract_foot_area_vs_depth
-%       'stlFile'        - STL filename used if footArea is not passed
-%       'alpha'          - alpha value for STL extraction fallback
-%       'showScaleLines' - true/false for Vc and Tc guide lines
-%       'useSeconds'     - true/false, true matches Katsuragi inset
-%
-%   Outputs:
-%       fig   - figure handle
-%       stats - struct with A_ref, D_eff, Vc, Tc, etc.
+%     'footArea'       - struct from extract_foot_area_vs_depth
+%     'stlFile'        - STL filename (fallback if footArea not passed)
+%     'alpha'          - alpha for STL extraction
+%     'd1'             - inertial length scale [cm] for forward model
+%     'k_over_m'       - friction coefficient [s^-2] for forward model
+%     'showScaleLines' - true/false (default true)
+%     'useSeconds'     - true/false (default true)
+%     'z_min_stable'   - stable shaft boundary [cm] (default 1.30)
 
     %% ── Parse inputs ─────────────────────────────────────────────────────
     p = inputParser;
-
-    addParameter(p, 'footArea', [], @(x) isempty(x) || isstruct(x));
-    addParameter(p, 'stlFile', 'jerboa_foot_model_rectangularbeam.stl', ...
-        @(s) ischar(s) || isstring(s));
-    addParameter(p, 'alpha', 1.5, @isnumeric);
-    addParameter(p, 'showScaleLines', true, @islogical);
-    addParameter(p, 'useSeconds', true, @islogical);
-
+    addParameter(p,'footArea',      [],     @(x) isempty(x)||isstruct(x));
+    addParameter(p,'stlFile', ...
+        'jerboa_foot_model_rectangularbeam.stl', @(s) ischar(s)||isstring(s));
+    addParameter(p,'alpha',         1.5,    @isnumeric);
+    addParameter(p,'d1',            [],     @isnumeric);
+    addParameter(p,'k_over_m',      [],     @isnumeric);
+    addParameter(p,'showScaleLines',true,   @islogical);
+    addParameter(p,'useSeconds',    true,   @islogical);
+    addParameter(p,'z_min_stable',  1.30,   @isnumeric);
     parse(p, varargin{:});
     opt = p.Results;
 
-    g_cm = 980;
-    nH   = numel(heights);
+    g_cm         = 980;
+    nH           = numel(heights);
+    doForward    = ~isempty(opt.d1) && ~isempty(opt.k_over_m);
+    z_min_stable = opt.z_min_stable;
 
-    %% ── Get or extract bare STL area profile ─────────────────────────────
+    %% ── Get foot area profile ────────────────────────────────────────────
     footArea = opt.footArea;
-
     if isempty(footArea)
-        fprintf('\nExtracting STL area profile for D_eff calculation...\n');
-
+        fprintf('\nExtracting STL area profile...\n');
         footArea = extract_foot_area_vs_depth(char(opt.stlFile), ...
             'alpha', opt.alpha);
-
-        fprintf('Finished STL area extraction for stopping-time scale.\n\n');
+    end
+    if ~isfield(footArea,'depth_cm') || ~isfield(footArea,'A_hull_sm')
+        error('footArea must contain depth_cm and A_hull_sm.');
     end
 
-    if ~isfield(footArea, 'depth_cm') || ~isfield(footArea, 'A_bare_sm')
-        error('footArea must contain fields depth_cm and A_bare_sm.');
+    %% ── D_eff from stable-shaft A_hull only ──────────────────────────────
+    % Use z >= z_min_stable — same regime where d1 and k/m are calibrated
+    in_stable = footArea.depth_cm >= z_min_stable & ...
+                isfinite(footArea.A_hull_sm) & ...
+                footArea.A_hull_sm > 0;
+
+    if ~any(in_stable)
+        warning('No stable-shaft depths found in footArea. Using full range.');
+        in_stable = isfinite(footArea.A_hull_sm) & footArea.A_hull_sm > 0;
     end
 
-    %% ── Determine experimental penetration range ─────────────────────────
-    max_d_exp = 0;
+    A_ref_cm2 = mean(footArea.A_hull_sm(in_stable), 'omitnan');
+    D_eff_cm  = sqrt(4*A_ref_cm2/pi);
+    Vc_cm_s   = sqrt(D_eff_cm * g_cm);
+    Tc_s      = sqrt(D_eff_cm / g_cm);
 
-    for j = 1:nH
-        if isfield(heights(j), 'd_mean')
-            max_d_exp = max(max_d_exp, max(heights(j).d_mean, [], 'omitnan'));
-        else
-            for i = 1:heights(j).nTrials
-                max_d_exp = max(max_d_exp, ...
-                    heights(j).trials(i).scalars.d_final_cm);
-            end
-        end
-    end
+    fprintf('\n-- t_stop vs v0 ---------------------------------------------\n');
+    fprintf('D_eff (stable shaft) = %.4f cm  (from z >= %.2f cm)\n', ...
+        D_eff_cm, z_min_stable);
+    fprintf('Vc = sqrt(D_eff*g)   = %.2f cm/s\n', Vc_cm_s);
+    fprintf('Tc = sqrt(D_eff/g)   = %.5f s\n', Tc_s);
 
-    in_range = footArea.depth_cm >= 0 & ...
-               footArea.depth_cm <= 1.10*max_d_exp & ...
-               isfinite(footArea.A_bare_sm);
-
-    if ~any(in_range)
-        error('No valid STL area values found within the experimental penetration range.');
-    end
-
-%% ── Characteristic size from convex-hull intrusion envelope ───────────
-% Katsuragi uses sphere diameter Db.
-% For the foot, use an equivalent diameter from the convex hull area,
-% which better represents the swept envelope seen by the grains.
-
-if isfield(footArea, 'A_hull_sm')
-    A_ref_cm2 = mean(footArea.A_hull_sm(in_range), 'omitnan');
-elseif isfield(footArea, 'A_hull')
-    A_ref_cm2 = mean(footArea.A_hull(in_range), 'omitnan');
-else
-    error('footArea must contain A_hull_sm or A_hull for convex-hull scaling.');
-end
-
-D_eff_cm = sqrt(4*A_ref_cm2/pi);
-
-% Optional characteristic length override
-% Leave empty to use convex-hull equivalent diameter.
-% Try values like 2.0, 4.0, or 6.5 cm to see how both guide lines move.
-Lc_override_cm = [];
-
-if isempty(Lc_override_cm)
-    Lc_cm = D_eff_cm;
-    Lc_label = 'convex-hull envelope';
-else
-    Lc_cm = Lc_override_cm;
-    Lc_label = 'manual length scale';
-end
-
-Vc_cm_s = sqrt(Lc_cm*g_cm);
-Tc_s    = sqrt(Lc_cm/g_cm);
+    % Compare to Katsuragi sphere
+    D_sphere = 2.54;
+    fprintf('Katsuragi sphere: Db=%.2f cm, Vc=%.1f cm/s, Tc=%.4f s\n', ...
+        D_sphere, sqrt(D_sphere*g_cm), sqrt(D_sphere/g_cm));
+    fprintf('D_eff/Db = %.3f\n', D_eff_cm/D_sphere);
+    fprintf('-------------------------------------------------------------\n\n');
 
     %% ── Collect plot data ────────────────────────────────────────────────
-    v0_mean_all    = [];
-    tstop_mean_all = [];
-
+    v0_all     = [];
+    tstop_all  = [];
     for j = 1:nH
-        v0_mean_all    = [v0_mean_all, heights(j).v0_mean];
-        tstop_mean_all = [tstop_mean_all, heights(j).tstop_mean];
+        v0_all    = [v0_all,    heights(j).v0_mean];
+        tstop_all = [tstop_all, heights(j).tstop_mean];
     end
 
     if opt.useSeconds
         t_scale = 1;
-        y_label = '$t_\mathrm{stop}$  (s)';
+        y_label = '$t_{\rm stop}$  (s)';
         Tc_plot = Tc_s;
     else
         t_scale = 1000;
-        y_label = '$t_\mathrm{stop}$  (ms)';
+        y_label = '$t_{\rm stop}$  (ms)';
         Tc_plot = Tc_s * 1000;
     end
 
+    %% ── Forward model t_stop prediction ─────────────────────────────────
+    v0_line   = linspace(1, max(v0_all)*1.08, 150);
+    t_fwd     = nan(size(v0_line));
+
+    if doForward
+        d1_val   = opt.d1;
+        km_val   = opt.k_over_m;
+        dt       = 0.00005;   % s — fine timestep for accuracy
+        max_time = 0.5;       % s — safety cap
+
+        for vi = 1:numel(v0_line)
+            v_t = v0_line(vi);
+            z_t = 0;
+            t_t = 0;
+            while v_t > 0 && t_t < max_time
+                d1_z  = max(d1_val, 3.40 - 1.01*z_t);   % depth-varying d1
+                accel = g_cm - km_val*z_t - v_t^2/d1_z;
+                v_new = v_t + accel*dt;
+                if v_new <= 0
+                    % Interpolate stopping time
+                    t_t = t_t + dt * v_t / (v_t - v_new);
+                    break;
+                end
+                v_t = v_new;
+                z_t = z_t + v_t*dt;
+                t_t = t_t + dt;
+            end
+            t_fwd(vi) = t_t;
+        end
+
+        if opt.useSeconds
+            t_fwd_plot = t_fwd;
+        else
+            t_fwd_plot = t_fwd * 1000;
+        end
+    end
+
     %% ── Figure ───────────────────────────────────────────────────────────
-    fig = figure('Name','t_stop vs v0', ...
-                 'ToolBar','none', ...
-                 'MenuBar','none');
-
-    fig.Position = [100 100 540 440];
-
-    ax = axes(fig, 'Position', [0.14 0.13 0.78 0.82]);
+    fig = figure('Name','t_stop vs v0','ToolBar','none','MenuBar','none');
+    fig.Position = [100 100 580 480];
+    ax = axes(fig,'Position',[0.13 0.13 0.83 0.82]);
     hold(ax,'on');
 
+    % Forward model — black dotted (plot first so data is on top)
+    if doForward
+        plot(ax, v0_line, t_fwd_plot, 'k:', 'LineWidth',2.2, ...
+            'HandleVisibility','off');
+    end
+
+    % Data points per height group
     for j = 1:nH
-
         hg = heights(j);
-
         [~, marker] = get_height_style(hg.h_cm);
-
         errorbar(ax, hg.v0_mean, hg.tstop_mean*t_scale, ...
             hg.tstop_std*t_scale, hg.tstop_std*t_scale, ...
             hg.v0_std, hg.v0_std, marker, ...
-            'Color', cmap(j,:), ...
-            'MarkerFaceColor','none', ...
-            'MarkerEdgeColor', cmap(j,:), ...
-            'MarkerSize', 9, ...
-            'LineWidth', 1.8, ...
+            'Color',cmap(j,:), 'MarkerFaceColor','none', ...
+            'MarkerEdgeColor',cmap(j,:), 'MarkerSize',9, 'LineWidth',1.8, ...
             'HandleVisibility','off');
     end
 
-    %% ── Characteristic scale guide lines ─────────────────────────────────
+    % Characteristic scale guide lines
     if opt.showScaleLines
+        xline(ax, Vc_cm_s, '--', 'Color',[0.45 0.45 0.45], ...
+            'LineWidth',1.4,'HandleVisibility','off');
+        yline(ax, Tc_plot,  '--', 'Color',[0.45 0.45 0.45], ...
+            'LineWidth',1.4,'HandleVisibility','off');
 
-        xline(ax, Vc_cm_s, '--', ...
-            'Color', [0.45 0.45 0.45], ...
-            'LineWidth', 1.4, ...
-            'HandleVisibility','off');
-
-        yline(ax, Tc_plot, '--', ...
-            'Color', [0.45 0.45 0.45], ...
-            'LineWidth', 1.4, ...
-            'HandleVisibility','off');
+        % Labels on guide lines
+        text(ax, Vc_cm_s + 2, max(tstop_all*t_scale)*0.15, ...
+            sprintf('$V_c=%.1f$ cm s$^{-1}$', Vc_cm_s), ...
+            'FontSize',9,'Interpreter','latex', ...
+            'Color',[0.35 0.35 0.35], ...
+            'HorizontalAlignment','left','VerticalAlignment','bottom');
+        text(ax, max(v0_all)*1.06, Tc_plot, ...
+            sprintf('$T_c=%.4f$ s', Tc_s), ...
+            'FontSize',9,'Interpreter','latex', ...
+            'Color',[0.35 0.35 0.35], ...
+            'HorizontalAlignment','right','VerticalAlignment','bottom');
     end
 
-    %% ── Axes styling ─────────────────────────────────────────────────────
-    set(ax,'FontSize',13, ...
-        'Box','on', ...
-        'LineWidth',1.2, ...
-        'XColor',[0 0 0], ...
-        'YColor',[0 0 0], ...
-        'XMinorTick','on', ...
-        'YMinorTick','on', ...
-        'TickDir','in');
-
+    set(ax,'FontSize',13,'Box','on','LineWidth',1.2, ...
+        'XColor',[0 0 0],'YColor',[0 0 0], ...
+        'XMinorTick','on','YMinorTick','on','TickDir','in', ...
+        'XLim',[0, max(v0_all)*1.10], ...
+        'YLim',[0, max(tstop_all*t_scale)*1.28]);
     grid(ax,'off');
-
-    xlabel(ax,'$v_0$  (cm s$^{-1}$)', ...
-        'FontSize',16, ...
-        'Interpreter','latex', ...
-        'Color',[0 0 0]);
-
-    ylabel(ax, y_label, ...
-        'FontSize',16, ...
-        'Interpreter','latex', ...
-        'Color',[0 0 0]);
-
-    xlim(ax, [0, max(v0_mean_all)*1.08]);
-    ylim(ax, [0, max(tstop_mean_all*t_scale)*1.25]);
+    xlabel(ax,'$v_0$  (cm s$^{-1}$)','FontSize',16, ...
+        'Interpreter','latex','Color',[0 0 0]);
+    ylabel(ax, y_label,'FontSize',16, ...
+        'Interpreter','latex','Color',[0 0 0]);
 
     %% ── Annotation ───────────────────────────────────────────────────────
+    ann_lines = {sprintf('$L_c = D_{\\rm eff} = %.3f$ cm', D_eff_cm), ...
+                 sprintf('$V_c = \\sqrt{L_c g} = %.1f$ cm s$^{-1}$', Vc_cm_s), ...
+                 sprintf('$T_c = \\sqrt{L_c/g} = %.4f$ s', Tc_s), ...
+                 '(stable shaft, $z \geq 1.30$ cm)'};
+    if doForward
+        ann_lines{end+1} = sprintf(...
+            'Fwd model: $d_1=%.2f$ cm, $k/m=%.0f$ s$^{-2}$', ...
+            opt.d1, opt.k_over_m);
+    end
 
-    text(ax, 0.97, 0.95, ...
-    sprintf(['$L_c=%.2f$ cm\n' ...
-             '$V_c=\\sqrt{L_c g}=%.1f$ cm s$^{-1}$\n' ...
-             '$T_c=\\sqrt{L_c/g}=%.3f$ s\n' ...
-             '%s'], ...
-        Lc_cm, Vc_cm_s, Tc_s, Lc_label), ...
-    'Units','normalized', ...
-    'Interpreter','latex', ...
-    'FontSize',10.5, ...
-    'HorizontalAlignment','right', ...
-    'VerticalAlignment','top', ...
-    'BackgroundColor',[1 1 1], ...
-    'EdgeColor',[0.25 0.25 0.25], ...
-    'Margin',4);
+    text(ax, 0.97, 0.97, strjoin(ann_lines, '\n'), ...
+        'Units','normalized','Interpreter','latex','FontSize',9, ...
+        'HorizontalAlignment','right','VerticalAlignment','top', ...
+        'BackgroundColor',[1 1 1],'EdgeColor',[0.25 0.25 0.25], ...
+        'Margin',4);
 
     %% ── Output stats ─────────────────────────────────────────────────────
-stats.A_ref_cm2 = A_ref_cm2;
-stats.D_eff_cm  = D_eff_cm;
-stats.Lc_cm     = Lc_cm;
-stats.Vc_cm_s   = Vc_cm_s;
-stats.Tc_s      = Tc_s;
-stats.g_cm_s2   = g_cm;
+    stats.A_ref_cm2   = A_ref_cm2;
+    stats.D_eff_cm    = D_eff_cm;
+    stats.Lc_cm       = D_eff_cm;
+    stats.Vc_cm_s     = Vc_cm_s;
+    stats.Tc_s        = Tc_s;
+    stats.g_cm_s2     = g_cm;
+    stats.z_min_stable= z_min_stable;
+    if doForward
+        stats.t_fwd   = t_fwd;
+        stats.v0_line = v0_line;
+    end
 end

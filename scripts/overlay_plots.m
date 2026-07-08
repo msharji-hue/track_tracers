@@ -4,6 +4,16 @@ clear; close all; clc;
 codeDir = '/Users/muhannadalsharji/Documents/track_tracers';
 addpath(fullfile(codeDir, 'src'));
 
+%% ── SUBSTRATE (set per run; force-model density comes from here) ──────────
+MATERIAL  = 'GB';        % 'GB' | 'CHIN'
+CONDITION = 'full';      % GB: full|shallow   CHIN: as_poured|dense
+M_FOOT    = 60;          % total dropped mass [g]
+sub       = get_substrate_properties(MATERIAL, CONDITION);
+rho_bulk  = sub.rho_bulk_g_cm3;
+if ~sub.ok, warning('overlay_plots:substrate', '%s', sub.reason); end
+fprintf('Substrate: %s/%s  rho_bulk=%.3f g/cm^3  phi=%.3f\n', ...
+        MATERIAL, CONDITION, rho_bulk, sub.phi);
+
 %% ── LOAD + GROUP ─────────────────────────────────────────────────────────
 trials  = load_selected_trials();
 %%
@@ -133,7 +143,7 @@ fig7b = [];
 if ~isempty(footArea)
     [fig7b, fitStats7b] = plot_fz_vs_V( ...
         z_targets_all, fitStats5.Fz_over_m, fitStats7.SE_plot, ...
-        d1_kinematic, footArea);
+        d1_kinematic, footArea, M_FOOT, rho_bulk);
     fprintf('Kang slope = %.1f  K_eff = %.1f  R2 = %.4f\n', ...
         fitStats7b.slope_fit, fitStats7b.K_eff, fitStats7b.r2_fit);
 end
@@ -143,7 +153,7 @@ fig7c = [];
 if ~isempty(footArea)
     [fig7c, fitStats7c] = plot_fz_vs_Az( ...
         z_targets_all, fitStats5.Fz_over_m, fitStats7.SE_plot, ...
-        d1_kinematic, k_over_m, footArea);
+        d1_kinematic, k_over_m, footArea, M_FOOT, rho_bulk);
     fprintf('A(z)*z linear: C=%.1f  K_eff=%.1f  R2=%.4f\n', ...
         fitStats7c.C_lin, fitStats7c.K_eff, fitStats7c.r2_lin);
     fprintf('A(z)*z power:  C=%.1f  p=%.2f  R2=%.4f\n', ...

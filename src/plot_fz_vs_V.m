@@ -17,11 +17,16 @@ function [fig, fitStats] = plot_fz_vs_V(z_targets, Fz_over_m, SE_plot, ...
 %       d1        - shared d1 [cm] (annotation)
 %       footArea  - struct from extract_foot_area_vs_depth
 %       m_foot    - total dropped mass [g], default 60
-%       rho_s     - packing density [g/cm^3], default 1.52
+%       rho_s     - bed BULK density [g/cm^3]; pass per-condition rho_bulk
 %       g_cm      - gravity [cm/s^2], default 980
 
     if nargin < 6, m_foot = 60;   end
-    if nargin < 7, rho_s  = 1.52; end
+    if nargin < 7 || isempty(rho_s)
+        warning('plot_fz_vs_V:noRho', ['rho_s (bed BULK density) not provided; falling ' ...
+            'back to 1.52 g/cm^3. Pass per-condition rho_bulk from ' ...
+            'get_substrate_properties(material,condition) for correct K_eff.']);
+        rho_s = 1.52;
+    end
     if nargin < 8, g_cm   = 980;  end
 
     z_targets = z_targets(:);
