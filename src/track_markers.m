@@ -4,7 +4,10 @@ function [trackedX, trackedY] = track_markers(detections, firstFrameCenters, tol
 %   Inputs:
 %       detections        - cell array of Nx2 center coordinates per frame
 %       firstFrameCenters - Mx2 initial marker positions
-%       tolerancePx       - max allowed displacement per frame (default 10)
+%       tolerancePx       - max match distance from a marker's LAST KNOWN
+%                           position. MUST be < one inter-marker spacing, else
+%                           a stale reference can match a NEIGHBOUR's detection
+%                           (measured spacing ~34.6 px => use ~25 px).
 %
 %   Outputs:
 %       trackedX - M x nFrames matrix of x positions (NaN = not detected)
@@ -22,7 +25,10 @@ function [trackedX, trackedY] = track_markers(detections, firstFrameCenters, tol
         fprintf('Auto tolerance: %.1f px\n', tolerancePx);
     end
 
-    % Sort markers by x descending so toe (rightmost) is always marker 1
+    % Sort markers by x descending. NOTE: markers sit on the RIGID ROD; none of
+    % them is the foot/toe. With the bed line at LOW x, marker 1 (largest x) is
+    % the marker FARTHEST from the bed and the LAST marker is NEAREST the bed.
+    % Do not assume marker 1 is 'the toe'.
     [~, sortIdx]      = sort(firstFrameCenters(:,1), 'descend');
     firstFrameCenters = firstFrameCenters(sortIdx, :);
 

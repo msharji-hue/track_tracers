@@ -15,14 +15,21 @@ function calib = get_calibration()
     calib.impactDistPx = -400;       % signed toe-to-bed distance (px) at impact
 
     % ── Bed line (two points, image px) ──────────────────────────────────
-    calib.bedPoint1    = [23,  0];
-    calib.bedPoint2    = [23, 32];
+    calib.bedPoint1    = [4,  0];
+    calib.bedPoint2    = [4, 36];
 
     % Implicit line  A*x + B*y + C = 0  through the two bed points
     calib.lineA = calib.bedPoint1(2) - calib.bedPoint2(2);
     calib.lineB = calib.bedPoint2(1) - calib.bedPoint1(1);
     calib.lineC = calib.bedPoint1(1)*calib.bedPoint2(2) - ...
                   calib.bedPoint2(1)*calib.bedPoint1(2);
+
+    % ── Tracking ─────────────────────────────────────────────────────────
+    %   Max match distance from a marker's last known position. Must stay
+    %   BELOW one inter-marker spacing (~34.6 px measured) or a stale
+    %   reference can grab a neighbour's detection. Largest observed real
+    %   motion is ~5-6 px/frame, so 25 px leaves ample headroom.
+    calib.trackTolerancePx = 25;
 
     % ── Physics / timing ─────────────────────────────────────────────────
     calib.g_cm_s2   = 980;           % gravity, cm/s^2

@@ -49,6 +49,17 @@ function process_trial(mode, inputTarget, outputRoot, opts)
     opts          = normalize_opts(opts);
     opts.fromMenu = fromMenu;
 
+    % Optional detection-parameter override (e.g. Pass 2 recovery). Only the
+    % named fields are replaced; everything else in default_detect_params()
+    % is preserved, so this cannot silently alter unrelated settings.
+    if isfield(opts,'detectParams') && isstruct(opts.detectParams)
+        f = fieldnames(opts.detectParams);
+        for i = 1:numel(f)
+            CFG.params.(f{i}) = opts.detectParams.(f{i});
+            fprintf('  [override] params.%s = %g\n', f{i}, opts.detectParams.(f{i}));
+        end
+    end
+
     if isempty(mode)
         sel = menu('Select workflow', ...
             '1 - Single trial / manual', ...
@@ -94,9 +105,10 @@ function run_single(CFG)
     [framesDir, detDir, resultsDir] = build_leaf_dirs(outRoot, m);
 
     cfg = base_cfg(CFG, m, fullfile(inDir, file), framesDir, detDir, resultsDir);
-    cfg.interactive = true; cfg.makeFigures = true;
-
+    cfg.interactive = false;
+    cfg.makeQA      = isfield(opts,'makeQA') && isequal(opts.makeQA, true);
     fprintf('Processing single trial: %s\n', m.trialTag);
+    
     try
         st = process_one_trial(cfg);
         if ~st.ok && st.partial
@@ -194,7 +206,7 @@ function run_batch(CFG, inputRoot, opts)
         end
 
         cfg = base_cfg(CFG, m, it.fullpath, framesDir, detDir, resultsDir);
-        cfg.interactive = false; cfg.makeFigures = true;
+        cfg.interactive = false; cfg.makeQA = true;
         if strcmp(opts.policy,'overwrite')
             cfg.reuseFrames = false; cfg.reuseDetections = false;
         else
@@ -265,7 +277,7 @@ function run_rerun(CFG, target)
     if stage == 0, fprintf('Cancelled.\n'); return; end
 
     cfg = base_cfg(CFG, m, target, framesDir, detDir, resultsDir);
-    cfg.interactive = true; cfg.makeFigures = true;
+    cfg.interactive = true; cfg.makeQA = true;
     switch stage
         case 1, cfg.reuseFrames = true;  cfg.reuseDetections = true;
         case 2, cfg.reuseFrames = true;  cfg.reuseDetections = false;
@@ -350,7 +362,7 @@ function cfg = base_cfg(CFG, m, videoPath, framesDir, detDir, resultsDir)
     cfg.nExpectedMarkers = CFG.nExpectedMarkers;
     cfg.filterType       = CFG.filterType;
     cfg.interactive      = false;
-    cfg.makeFigures      = false;
+    cfg.makeQA           = false;
     cfg.reuseFrames      = false;
     cfg.reuseDetections  = false;
 end
@@ -361,7 +373,14 @@ function [framesDir, detDir, resultsDir] = build_leaf_dirs(outputRoot, m)
     else
         rel = fullfile(m.material, m.batchName, m.trialParent, m.container);
     end
-    framesDir  = fullfile(outputRoot, '01_FRAMES',           rel);
+    % Exported frames are a DISPOSABLE intermediate (regenerable from the .avi).
+    % To keep millions of PNGs out of Dropbox, they go under a LOCAL scratch root
+    % if one is set via the JERBOA_FRAMES_ROOT environment variable; otherwise
+    % they fall back to outputRoot (original behaviour). Detections and results
+    % — the small, precious outputs — always stay under outputRoot.
+    framesRoot = getenv('JERBOA_FRAMES_ROOT');
+    if isempty(framesRoot), framesRoot = outputRoot; end
+    framesDir  = fullfile(framesRoot, '01_FRAMES',           rel);
     detDir     = fullfile(outputRoot, '02_SAVED_DETECTIONS', rel);
     resultsDir = fullfile(outputRoot, '03_RESULTS',          rel);
 end
