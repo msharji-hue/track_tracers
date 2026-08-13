@@ -1,5 +1,13 @@
 function R = gcheck(root, varargin)
 % GCHECK  Calibration/friction GATE driver.
+%
+%   *** BROKEN: validate_calibration_gcheck IS NOT IN THIS REPOSITORY. ***
+%   Every path through this function ends in a call to it, so gcheck errors
+%   out on the last line no matter how it is invoked. It is kept because the
+%   assembly logic below is still the right way to build the trials struct
+%   array, but either validate_calibration_gcheck must be restored or this
+%   file should be deleted. Do not treat a gcheck run as a passed gate.
+%
 %   Assembles trials from <root>/03_RESULTS/**/*_tracks.mat and runs
 %   validate_calibration_gcheck. This is the convenience entry point that the
 %   runbook's "Step 3" refers to — validate_calibration_gcheck itself takes an
@@ -13,7 +21,7 @@ function R = gcheck(root, varargin)
 %   R = gcheck(root,'massG',65,'gBand',[0.85 1.00])   % passed through
 %
 %   Fields handed to validate_calibration_gcheck per trial:
-%     .trackedX .trackedY .fps .h_cm(=dropHeight_mm/10) .label(=trialTag)
+%     .trackedX .trackedY .fps .h_cm(=true_drop_height/10) .label(=trialTag)
 
     p = inputParser;
     addParameter(p,'select',{},@iscell);
@@ -39,9 +47,14 @@ function R = gcheck(root, varargin)
         try s = load(tp,'meta'); m = s.meta; catch, continue; end
         if ~isempty(o.material)  && ~strcmpi(getfld(m,'material',''),  o.material),  continue; end
         if ~isempty(o.container) && ~strcmpi(getfld(m,'container',''), o.container), continue; end
+        % h is a PHYSICAL height here (it sets the free-fall reference the gate
+        % compares against), so the label must be corrected. GB/shallow labels
+        % are reversed on disk.
+        cond = string(getfld(m,'material','')) + "/" + string(getfld(m,'container',''));
         M(end+1) = struct('tag',getfld(m,'trialTag',''), ...
             'material',getfld(m,'material',''), 'container',getfld(m,'container',''), ...
-            'h',getfld(m,'dropHeight_mm',NaN), 'trial',getfld(m,'trialNum',NaN), ...
+            'h',true_drop_height(getfld(m,'dropHeight_mm',NaN), cond), ...
+            'trial',getfld(m,'trialNum',NaN), ...
             'path',tp); %#ok<AGROW>
     end
     if isempty(M), error('No trials matched the material/container filter.'); end
