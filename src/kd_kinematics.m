@@ -33,8 +33,6 @@ function kin = kd_kinematics(trackedX, trackedY, calib, dt, varargin)
 %     'accelTolRel'   relative accel-uncertainty target           (default 0.005)  % 0.5%
 %     'accelTolAbs'   absolute floor, in units of g               (default 0.005)  % 0.005 g
 %     'rebFactor'     stop uses v above rebFactor*max rebound      (default 2)
-%     'preFallMs'     window (ms) before impact for g_eff parabola fit (default 40;
-%                     needs >=~20 ms of fall for a stable per-trial g_eff)
 %     'postCapMs'     ms after stop retained in z/v                (default calib.postCapMs or 10)
 %
 %   OUTPUT (struct kin)
@@ -42,8 +40,6 @@ function kin = kd_kinematics(trackedX, trackedY, calib, dt, varargin)
 %                                                 outside [impact,stop])
 %     .impact_index .stopFrame
 %     .v0_cm_s .d_final_cm .t_stop_s
-%     .g_eff_cm_s2 .friction_over_m_cm_s2         pre-impact fall accel & rail friction
-%     .g_eff_se_cm_s2
 %     .accel_se .winHalfFrames                    per-point accel SE & window used
 %     .refMarkerID .rodBedDist_px                 impact-reference metadata
 %     .method                                     tag string for provenance
@@ -54,7 +50,6 @@ function kin = kd_kinematics(trackedX, trackedY, calib, dt, varargin)
     addParameter(p,'accelTolRel', 0.005,@isnumeric);
     addParameter(p,'accelTolAbs', 0.005,@isnumeric);
     addParameter(p,'rebFactor',   2,    @isnumeric);
-    addParameter(p,'preFallMs',   40,   @isnumeric);   % long window: g_eff scatter ~1-2 cm/s^2
     addParameter(p,'postCapMs',   [],   @(x)isempty(x)||isnumeric(x));
     parse(p,varargin{:});
     o = p.Results;
@@ -67,7 +62,6 @@ function kin = kd_kinematics(trackedX, trackedY, calib, dt, varargin)
     % ── ms -> frames (per trial; handles the fps spread) ──────────────────
     wMin = max(1, round(o.minWindowMs*1e-3 / dt));   % half-window, frames
     wMax = max(wMin, round(o.maxWindowMs*1e-3 / dt));
-    preFallFrames = max(3, round(o.preFallMs*1e-3 / dt));
     postCapFrames = round(o.postCapMs*1e-3 / dt);
 
     nF = size(trackedX,2);
@@ -78,14 +72,32 @@ function kin = kd_kinematics(trackedX, trackedY, calib, dt, varargin)
                              calib.lineA, calib.lineB, calib.lineC, calib.mmPerPx);
     z_rod = z_rod(:).';                          % row
 
-    % reference-marker metadata (nearest the impact plane) — not "the toe"
+    % Reference marker = the one FURTHEST from the bed line at the first frame
+    % where all markers are detected, i.e. the top marker on the rod. This is
+    % chosen by geometry ALONE and is deliberately independent of
+    % calib.impactDistPx: selecting it as "nearest impactDistPx" would make the
+    % marker sit at the trigger value by construction, collapsing the impact
+    % frame onto the first-detection frame.
     bedNorm  = sqrt(calib.lineA^2 + calib.lineB^2);
     d_px_all = (calib.lineA.*trackedX + calib.lineB.*trackedY + calib.lineC)./bedNorm;
     ff = find(all(isfinite(trackedX),1),1,'first');
     if isempty(ff), ff = find(any(isfinite(trackedX),1),1,'first'); end
-    col = d_px_all(:,ff); col(~isfinite(col)) = Inf;
-    [~, refMarkerID] = min(abs(col - calib.impactDistPx));
+    col = d_px_all(:,ff);
+    col(~isfinite(col)) = +Inf;              % dropped markers can't win a minimum
+    [~, refMarkerID] = min(col);             % most negative = furthest on the rod side
     rodBedDist_px    = d_px_all(refMarkerID,:);
+
+    % Trigger reachability: impactDistPx must lie INSIDE this marker's observed
+    % range, or the geometric anchor degenerates to an endpoint.
+    rbFin = rodBedDist_px(isfinite(rodBedDist_px));
+    if ~isempty(rbFin) && (calib.impactDistPx < min(rbFin) || calib.impactDistPx > max(rbFin))
+        warning('kd_kinematics:triggerOutOfRange', ...
+            ['impactDistPx = %g px is outside the reference marker''s observed range ' ...
+             '[%.1f, %.1f] px, so the geometric impact anchor degenerates to an ' ...
+             'endpoint (impact will be pinned near the start/end of tracking). ' ...
+             'Set impactDistPx to the distance the top marker actually has at ' ...
+             'bed contact.'], calib.impactDistPx, min(rbFin), max(rbFin));
+    end
 
     t = (0:nF-1).*dt;
 
@@ -105,7 +117,7 @@ function kin = kd_kinematics(trackedX, trackedY, calib, dt, varargin)
     %   Stop = first zero-crossing of v after impact, refined by KD-style linear
     %   extrapolation of the segment just before the crossing, using only v above
     %   rebFactor * max post-crossing rebound speed.
-    [stopFrame, t_stop_s] = find_stop(vLite, t, impact_index, o.rebFactor);
+    [stopFrame, t_stop_s, a_stop] = find_stop(vLite, t, impact_index, o.rebFactor);
 
     % ── 4) ACCELERATION: order-1 adaptive line-segment fits of v_raw ──────
     %   Windows clamped to [impact, stop] so no fit straddles the stop
@@ -127,27 +139,7 @@ function kin = kd_kinematics(trackedX, trackedY, calib, dt, varargin)
     % net (resistive) acceleration in the project convention
     a_plus_g = -a - g;
 
-    % ── 5) PRE-IMPACT EFFECTIVE GRAVITY (rail-friction / calibration check) ─
-    %   During the guided fall the only forces are gravity and rail friction, so
-    %   the free-fall obeys  z(t) = c0 + c1 t + (1/2) g_eff t^2  and g_eff = 2*c2.
-    %   We fit the RAW POSITION to a parabola (not a differentiated velocity
-    %   slope): position noise is iid so the quadratic coefficient is unbiased,
-    %   whereas a slope-of-central-difference estimate is noise-biased. Validated
-    %   on synthetic trajectories: over an 8 ms window g_eff scatter is
-    %   +/-75-150 cm/s^2, but over >=40 ms it collapses to ~1-2 cm/s^2. So we use
-    %   a LONG window (all available clean pre-impact frames up to preFallMs).
-    pfStart = max(ff, impact_index - preFallFrames);
-    pf = pfStart : (impact_index-2);
-    pf = pf(pf>=1);
-    if numel(pf)*dt*1e3 < 20
-        warning('kd_kinematics:shortFall', ...
-            ['Only %.1f ms of pre-impact fall available; g_eff is uncertain for ' ...
-             'this trial (lean on the cross-trial mean).'], numel(pf)*dt*1e3);
-    end
-    [g_eff, g_eff_se] = fit_parabola_accel(t(pf), z_rod(pf));
-    friction_over_m   = g - g_eff;          % cm/s^2   (>=0 expected)
-
-    % ── 6) DEPTH (measured), zeroed at impact; time re-zeroed at impact ────
+    % ── 5) DEPTH (measured), zeroed at impact; time re-zeroed at impact ────
     depthRod_cm = z_rod - z_rod(impact_index);
     t_s         = t - t(impact_index);
 
@@ -175,10 +167,8 @@ function kin = kd_kinematics(trackedX, trackedY, calib, dt, varargin)
     kin.stopFrame     = stopFrame;
     kin.v0_cm_s       = v0_cm_s;
     kin.d_final_cm    = d_final_cm;
+    kin.a_stop_cm_s2  = a_stop;              % KD acceleration discontinuity
     kin.t_stop_s      = t_stop_s;
-    kin.g_eff_cm_s2       = g_eff;
-    kin.g_eff_se_cm_s2    = g_eff_se;
-    kin.friction_over_m_cm_s2 = friction_over_m;
     kin.accel_se      = accel_se(:);
     kin.winHalfFrames = winHalf(:);
     kin.refMarkerID   = refMarkerID;
@@ -186,11 +176,10 @@ function kin = kd_kinematics(trackedX, trackedY, calib, dt, varargin)
     kin.dt            = dt;
     kin.method        = 'velocity-first; order-1 adaptive line-segment a (KD 2007)';
 
-    fprintf(['kd_kinematics: impact=%d stop=%d | v0=%.1f cm/s d=%.3f cm t_stop=%.4f s\n' ...
-             '  g_eff=%.1f cm/s^2 (%.1f%% of g) -> f/m=%.1f cm/s^2 | win %d-%d frames\n'], ...
+    fprintf(['kd_kinematics: impact=%d stop=%d | v0=%.1f cm/s d=%.3f cm t_stop=%.4f s' ...
+             ' | win %d-%d frames\n'], ...
         impact_index, stopFrame, v0_cm_s, d_final_cm, t_stop_s, ...
-        g_eff, 100*g_eff/g, friction_over_m, min(winHalf(impact_index:stopFrame)), ...
-        max(winHalf(impact_index:stopFrame)));
+        min(winHalf(impact_index:stopFrame)), max(winHalf(impact_index:stopFrame)));
 end
 
 % ===================== helpers =========================================
@@ -228,20 +217,6 @@ function [slope, se] = fit_slope(x, y)
     se = sqrt(s2/Sxx);
 end
 
-function [accel, se] = fit_parabola_accel(x, y)
-% Fit y = c2 x^2 + c1 x + c0; free-fall acceleration = 2*c2 (unbiased under iid
-% position noise). SE from the coefficient covariance sigma^2 (A'A)^-1.
-    ok = isfinite(x) & isfinite(y); x = x(ok); y = y(ok);
-    x = x(:); y = y(:); n = numel(x);
-    if n < 5, accel = NaN; se = NaN; return; end
-    A = [x.^2, x, ones(n,1)];
-    c = A\y;
-    accel = 2*c(1);
-    resid = y - A*c;
-    s2 = sum(resid.^2)/max(1,(n-3));
-    C  = s2 * inv(A.'*A);           %#ok<MINV>  small 3x3, fine
-    se = 2*sqrt(max(0,C(1,1)));
-end
 
 function [a_i, v_i, se_i, wUsed] = adaptive_slope(t, v, i, wMin, wMax, loEdge, hiEdge, relTol, absTol, g)
 % Grow a symmetric window (clamped to [loEdge,hiEdge]) until the slope SE meets
@@ -262,10 +237,13 @@ function [a_i, v_i, se_i, wUsed] = adaptive_slope(t, v, i, wMin, wMax, loEdge, h
     end
 end
 
-function [stopFrame, t_stop] = find_stop(v, t, impact_index, rebFactor)
+function [stopFrame, t_stop, a_stop] = find_stop(v, t, impact_index, rebFactor)
 % First zero-crossing of v after impact, refined by linear extrapolation of the
 % pre-crossing segment; ignores rebound below rebFactor*max post-crossing speed.
+% Returns a_stop = the fitted slope, i.e. KD's acceleration discontinuity from
+% v(t) = a_stop*(t - t_stop)  (KD 2007 Methods).
     n = numel(v);
+    a_stop = NaN;
     cross = [];
     for i = impact_index+1:n
         if isfinite(v(i)) && v(i) <= 0, cross = i; break; end
@@ -284,6 +262,7 @@ function [stopFrame, t_stop] = find_stop(v, t, impact_index, rebFactor)
     if numel(seg) >= 2
         [m, ~] = fit_slope(t(seg), v(seg));
         b = mean(v(seg)) - m*mean(t(seg));
+        a_stop = m;                       % KD's acceleration discontinuity
         if isfinite(m) && m ~= 0
             t_stop = -b/m;
         else

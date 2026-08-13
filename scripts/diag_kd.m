@@ -45,8 +45,12 @@ function diag_kd(tracksPath)
 
     ck(logf, 'G: kd_kinematics (NO figure)...');
     kin = kd_kinematics(tr.trackedX, tr.trackedY, calib, 1/fps);
-    ck(logf, sprintf('G: ok  v0=%.1f  d=%.3f  g_eff=%.1f  f/m=%.1f', ...
-        kin.v0_cm_s, kin.d_final_cm, kin.g_eff_cm_s2, kin.friction_over_m_cm_s2));
+    % The pre-impact effective-gravity and rail-friction estimates were removed
+    % from kd_kinematics: the pre-impact window (0-8 frames) is far too short to
+    % fit a free-fall parabola against. a_stop is KD's acceleration
+    % discontinuity, taken from the v(t) fit, and is what replaced them.
+    ck(logf, sprintf('G: ok  v0=%.1f  d=%.3f  a_stop=%.1f', ...
+        kin.v0_cm_s, kin.d_final_cm, kin.a_stop_cm_s2));
 
     ck(logf, '=== diag_kd DONE (no crash) ===');
     fprintf('\ndiag_kd completed with NO crash. Log: %s\n', logf);

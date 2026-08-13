@@ -94,12 +94,22 @@ function T = audit_all_trials(root, varargin)
 
         imf(k)=kin.impact_index; stf(k)=kin.stopFrame; pre(k)=kin.impact_index-1;
         npo(k)=kin.stopFrame-kin.impact_index;
-        v0m(k)=kin.v0_cm_s;  v0f(k)=sqrt(2*g*(hmm(k)/10));  rat(k)=v0m(k)/v0f(k);
+        v0m(k)=kin.v0_cm_s;
+        %  h = 0 has no free-fall reference: sqrt(2gh) = 0, so the ratio is
+        %  undefined. Leave it NaN rather than letting Inf poison the stats.
+        if hmm(k) > 0
+            v0f(k)=sqrt(2*g*(hmm(k)/10));  rat(k)=v0m(k)/v0f(k);
+        else
+            v0f(k)=NaN;                    rat(k)=NaN;
+        end
         %  GB/shallow labels are REVERSED on disk -- see src/true_drop_height.m.
         %  Physics must use the TRUE height; the label stays as an identifier.
         htrue(k) = true_drop_height(hmm(k), cond(k));
-        v0ft(k)  = sqrt(2*g*(htrue(k)/10));
-        ratt(k)  = v0m(k)/v0ft(k);
+        if htrue(k) > 0
+            v0ft(k) = sqrt(2*g*(htrue(k)/10));  ratt(k) = v0m(k)/v0ft(k);
+        else
+            v0ft(k) = NaN;                      ratt(k) = NaN;
+        end
         trig(k)  = calibT.impactDistPx;
         dfin(k)=kin.d_final_cm;
         astp(k)=getf2(kin,'a_stop_cm_s2',NaN);
@@ -194,9 +204,9 @@ function T = audit_all_trials(root, varargin)
     end
 
     fprintf('\nv0 ratio (LABELLED height): median %.2f  max %.2f\n', ...
-        median(T.ratio,'omitnan'), max(T.ratio));
+        median(T.ratio,'omitnan'), max(T.ratio,[],'omitnan'));
     fprintf('v0 ratio (TRUE height)    : median %.2f  max %.2f   <- should be <= ~1.1\n', ...
-        median(T.ratio_true,'omitnan'), max(T.ratio_true));
+        median(T.ratio_true,'omitnan'), max(T.ratio_true,[],'omitnan'));
     nrev = sum(T.dropHeight_mm ~= T.dropHeight_true_mm);
     fprintf('height labels corrected   : %d trial(s) (GB/shallow)\n', nrev);
     fprintf('\nfigures: one per condition x geometry\n');

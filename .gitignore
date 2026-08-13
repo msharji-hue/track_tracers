@@ -17,3 +17,9 @@ outputs/
 # OS
 .DS_Store
 Thumbs.db
+
+# Dropbox/OneDrive conflicted copies
+* 2.m
+* 3.m
+* [0-9].m
+*conflicted copy*

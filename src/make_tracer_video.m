@@ -10,7 +10,7 @@ function make_tracer_video(framesDir, detectOut, params, doSave)
 %   params.minWidth and the video is centered, so the caption has room to be
 %   readable. Caption is two lines, auto-sized to fit the panel.
 %
-%   Orientation matches make_trial_video.m: each frame is rot90(img,1), with
+%   Orientation matches make_annotated_video.m: each frame is rot90(img,1), with
 %       x_rot = y_orig ,  y_rot = (rotatedHeight - x_orig)
 %
 %   params fields:

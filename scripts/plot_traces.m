@@ -169,7 +169,9 @@ for i = 1:n
     if isfield(S.meta,'dropHeight_true_mm') && isfinite(S.meta.dropHeight_true_mm)
         hh(i) = S.meta.dropHeight_true_mm;
     else
-        hh(i) = S.meta.dropHeight_mm;
+        % Older meta predating the height correction: apply it here rather
+        % than falling back to the raw label, which is reversed for GB/shallow.
+        hh(i) = true_drop_height(S.meta.dropHeight_mm, cnd(i));
     end
     pth(i) = p;
 end
