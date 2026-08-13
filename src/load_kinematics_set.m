@@ -114,6 +114,29 @@ K = table(tag, mdl, cond, hLab, hTrue(:), wasCorr(:), fps, impF, stopF, ...
         'impactDistPx','bedX','kinPath'});
 K.isZeroDrop = K.dropHeight_true_mm == 0;
 
+% ── phi: take the CURRENT value, not the one baked into the CSV ──────────
+% _kin_scalars.csv carries meta.phi as it stood at TRACKING time, which for
+% this dataset is the retired single-measurement figure (0.629 / 0.636 /
+% 0.276 / 0.409). get_substrate_properties holds the finalised five-prep
+% means (0.624 / 0.643 / 0.280 / 0.402), so re-read it here and overwrite.
+K.phi_csv = K.phi;                       % kept for provenance
+for i = 1:height(K)
+    parts = split(K.condition(i), "/");
+    if numel(parts) ~= 2, continue; end
+    try
+        sub = get_substrate_properties(char(parts(1)), char(parts(2)));
+        if isstruct(sub) && isfield(sub,'phi') && isfinite(sub.phi)
+            K.phi(i) = sub.phi;
+        end
+    catch
+        % leave the CSV value in place if the lookup fails
+    end
+end
+nPhi = sum(isfinite(K.phi) & isfinite(K.phi_csv) & abs(K.phi-K.phi_csv) > 1e-6);
+if nPhi > 0
+    fprintf('  phi refreshed from get_substrate_properties : %d row(s)\n', nPhi);
+end
+
 fprintf('kin_scalars found         : %d\n', height(K));
 
 % ── model / condition filter ─────────────────────────────────────────────
