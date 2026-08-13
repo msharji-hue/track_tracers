@@ -62,6 +62,12 @@ Settled values, in `src/get_calibration.m`:
 | `g_cm_s2` | `980` |
 | `trackTolerancePx` | `25` |
 
+`mmPerPx` is set by direct measurement of the marker diameter. An earlier
+approach that inferred it from a pre-impact `g_eff` fit was abandoned: the
+camera field of view sits on the bed, so only 0–8 pre-impact frames are
+captured — too few to fit the fall parabola. Rail friction is therefore
+unmeasured, and impact velocity is taken from the imaging (`v0_cm_s`).
+
 `impactDistPx` is the signed rod-to-bed distance at contact and depends on the
 foot **model**, because each 3D-printed foot has a different rod-to-toe offset:
 
@@ -175,11 +181,6 @@ Those datasets are not analysable until re-acquired or reprocessed. The model
 drivers (`run_models`, `run_new_models`, `run_pass2`, `preflight_new_models`,
 `review_model_trials`, `clear_model_kinematics`) are kept pending that
 investigation.
-
-**`gcheck` does not run.** Every path through it ends in a call to
-`validate_calibration_gcheck`, which is not in this repository. Either restore
-that function or delete `scripts/gcheck.m`. Do not treat a `gcheck` run as a
-passed gate.
 
 ---
 

@@ -29,8 +29,10 @@ function calib = get_calibration(bedX, container, model)
     calib = struct();
 
     % ── Pixel scale & impact reference ────────────────────────────────────
-    calib.mmPerPx      = 0.1079;     % mm per pixel (pxPerMm = 9.27;
-                                     %  2 mm marker = 18.5 px).
+    calib.mmPerPx      = 0.1079;     % mm per pixel. 2 mm marker = 18.5 px,
+                                     %  pxPerMm = 9.27. Settled by direct
+                                     %  measurement. Supersedes 0.1429 and a
+                                     %  briefly-trialled 0.12245.
 
     % ── Bed line (two points, image px) ──────────────────────────────────
     calib.bedX         = bedX;
