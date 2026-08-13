@@ -54,10 +54,13 @@ function write_height_labels(root, varargin)
     L(end+1) = "";
     L(end+1) = "HOW TO USE THE DATA CORRECTLY:";
     L(end+1) = "  src/true_drop_height.m    single source of truth for the map";
-    L(end+1) = "  src/load_meta_checked.m   use INSTEAD of load(tp,'meta'); it adds";
-    L(end+1) = "                            meta.dropHeight_true_mm and warns once";
+    L(end+1) = "                            call it on meta.dropHeight_mm at every";
+    L(end+1) = "                            site that reads a height, e.g.";
+    L(end+1) = "                              h = true_drop_height(meta.dropHeight_mm, cond)";
+    L(end+1) = "  src/load_kinematics_set.m supplies dropHeight_true_mm already";
+    L(end+1) = "                            corrected, for analysis-level work";
     L(end+1) = "";
-    L(end+1) = "  Use meta.dropHeight_true_mm for ALL physics (v0, scaling, plots).";
+    L(end+1) = "  Use the CORRECTED height for ALL physics (v0, scaling, plots).";
     L(end+1) = "  Use meta.dropHeight_mm / trialTag ONLY as file identifiers.";
     L(end+1) = "";
     L(end+1) = "Depth (d_final_cm) is NOT affected by this correction.";
@@ -81,7 +84,8 @@ function write_height_labels(root, varargin)
         "    labelled  65 ->  325 mm        labelled 325 ->   65 mm"; ...
         "    labelled 125 ->  285 mm        labelled 365 ->   25 mm"; ...
         "    labelled 165 ->  165 mm  (unchanged)"; ""; ...
-        "Use src/load_meta_checked.m, which supplies meta.dropHeight_true_mm."; ...
+        "Pass meta.dropHeight_mm through src/true_drop_height.m before using it"; ...
+        "as a physical height. src/load_kinematics_set.m does this for you."; ...
         "Full explanation: 03_RESULTS/HEIGHT_LABELS_README.txt"; ...
         "Depth values are unaffected."], newline);
 

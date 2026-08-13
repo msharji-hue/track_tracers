@@ -5,10 +5,10 @@ function status = process_one_trial(cfg)
 %   -> redefine that as tracking frame 1 -> track_markers -> save + QA.
 %
 %   Deliberately contains NO kinematics: no Savitzky-Golay smoothing, no
-%   velocity/acceleration, no (a+g), no force-law fitting, no rod bending, and
-%   no impact/stop event detection. Those live downstream (track_tracers_2.m,
-%   sg_sensitivity.m, rod_bending.m) and operate on the saved tracks. This keeps
-%   a smoothing or force-model problem from ever costing a 368-video batch.
+%   velocity/acceleration, no (a+g), no force-law fitting, no rod rotation, and
+%   no impact/stop event detection. Those live downstream (track_tracers_2.m ->
+%   kd_kinematics.m, rod_angle.m) and operate on the saved tracks. This keeps a
+%   smoothing or model problem from ever costing a 368-video batch.
 %
 %   Status semantics:
 %     OK      : detections + tracks + metadata + QA all saved
