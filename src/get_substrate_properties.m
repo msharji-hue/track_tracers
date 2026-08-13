@@ -27,11 +27,18 @@ function sub = get_substrate_properties(material, condition)
     condition = lower(strtrim(char(condition)));
 
     % {material, condition, rho_particle_g_cm3, rho_bulk_g_cm3, phi}
+    %   FINALISED VALUES. phi is the mean of five independent preparations
+    %   (pour -> level -> weigh); rho_bulk = phi * rho_particle. These supersede
+    %   the earlier single-measurement figures (0.629 / 0.636 / 0.276 / 0.409),
+    %   which came from one preparation each and are no longer used anywhere.
+    %   The +/- on phi (0.004 / 0.009 / 0.004 / 0.004) is RANDOM only; particle
+    %   densities are treated as exact, so absolute phi carries an additional
+    %   systematic that cancels between conditions but not against literature.
     T = {
-        'GB',   'full',      2.50, 1.572, 0.629
-        'GB',   'shallow',   2.50, 1.590, 0.636
-        'CHIN', 'as_poured', 2.35, 0.649, 0.276
-        'CHIN', 'dense',     2.35, 0.962, 0.409 };
+        'GB',   'full',      2.50, 1.560, 0.624
+        'GB',   'shallow',   2.50, 1.607, 0.643
+        'CHIN', 'as_poured', 2.35, 0.658, 0.280
+        'CHIN', 'dense',     2.35, 0.945, 0.402 };
 
     sub = struct('material',material, 'condition',condition, ...
                  'rho_particle_g_cm3',NaN, 'rho_bulk_g_cm3',NaN, 'phi',NaN, ...
