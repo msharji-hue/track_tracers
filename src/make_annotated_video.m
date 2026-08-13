@@ -8,7 +8,7 @@ function make_annotated_video(framesDir, det, kin, params, saveVideo)
 %       framesDir  - path to folder containing frame_XXXXX.png files
 %       det        - detections struct
 %       kin        - kinematics struct
-%       params     - parameter struct (see make_trial_video.m)
+%       params     - parameter struct (built by scripts/make_video.m)
 %       saveVideo  - true to save .mp4, false to preview only
 
     % ── Setup ─────────────────────────────────────────────────────────────
