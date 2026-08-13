@@ -11,8 +11,10 @@ function calib = get_calibration()
     calib = struct();
 
     % ── Pixel scale & impact reference ────────────────────────────────────
-    calib.mmPerPx      = 0.1079;     % mm per pixel
-    calib.impactDistPx = -400;       % signed toe-to-bed distance (px) at impact
+    calib.mmPerPx      = 0.1429;     % mm per pixel (2 mm = 14 px -> 0.142857;
+                                     %  supersedes 0.1079. Confirm via the
+                                     %  pre-impact g_eff check, validate_calibration_gcheck.m)
+    calib.impactDistPx = -400;       % signed rod-to-bed distance (px) at impact
 
     % ── Bed line (two points, image px) ──────────────────────────────────
     calib.bedPoint1    = [4,  0];

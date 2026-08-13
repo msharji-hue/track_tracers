@@ -21,11 +21,29 @@ function process_trial(mode, inputTarget, outputRoot, opts)
 %     .dryRun        list videos + metadata + planned paths, process nothing
 %     .limit         process only first N videos (0 = all)  [test batch]
 %     .batchLabel    inserted into output path; '' = omit the batch level
-%     .policy        'reuse'(default) | 'resume' | 'overwrite'
+%     .policy        'reuse'(default) | 'resume' | 'retry' | 'overwrite'
 %                      reuse     : reuse frames+detections if present, redo tracks
 %                      resume    : additionally SKIP trials already having tracks
+%                      retry     : skip trials that already have tracks, and for
+%                                  those that do NOT, re-detect from the frames
+%                                  instead of reloading the cached detections.
+%                                  Use this to retry FAILED trials: 'resume'
+%                                  reloads the very detections that failed and
+%                                  so reproduces the failure exactly.
 %                      overwrite : re-export, re-detect, re-track everything
 %     .videoListFile a .txt of full video paths to process (e.g. a retry list)
+%     .detectParams  struct of detection-parameter overrides for the FIRST pass
+%     .backupParams  struct of detection parameters for a SECOND pass, tried
+%                    automatically when the first pass finds no frame with the
+%                    expected marker count. Set to struct() to disable. The
+%                    default leans the detector toward finding more circles:
+%                    higher sensitivity, lower edge threshold, wider radii.
+%     .model         foot model: 'Default Model' | 'Tight Model' | 'Wide Model'
+%                    When set, the model is appended to trialTag, inserted as a
+%                    level in the output path, and used to select the per-model
+%                    calibration via get_calibration_model. When '' (default)
+%                    every behaviour below is exactly as it was before models
+%                    existed, so old runs reproduce bit for bit.
 
     if nargin < 1, mode        = ''; end
     if nargin < 2, inputTarget = ''; end
@@ -72,9 +90,9 @@ function process_trial(mode, inputTarget, outputRoot, opts)
     mode = normalize_mode(mode);
 
     switch mode
-        case 'single', run_single(CFG);
+        case 'single', run_single(CFG, opts);
         case 'batch',  run_batch(CFG, inputTarget, opts);
-        case 'rerun',  run_rerun(CFG, inputTarget);
+        case 'rerun',  run_rerun(CFG, inputTarget, opts);
         otherwise,     error('Unknown mode "%s" (single|batch|rerun)', mode);
     end
 end
@@ -82,7 +100,7 @@ end
 % ═════════════════════════════════════════════════════════════════════════
 %  MODE 1 — SINGLE / MANUAL
 % ═════════════════════════════════════════════════════════════════════════
-function run_single(CFG)
+function run_single(CFG, opts)
     close all; clc;
     fprintf('\n=== SINGLE TRIAL / MANUAL ===\n');
 
@@ -95,11 +113,14 @@ function run_single(CFG)
     if ~isnan(it.trialNum),      defT = num2str(it.trialNum);      end
     fields = inputdlg( ...
         {'Material (GB/CHIN)','Batch (blank=none)','Drop height (mm)', ...
-         'Trial number','Container (full/shallow)'}, ...
-        'Confirm trial info', 1, {it.material, '', defH, defT, it.container});
+         'Trial number','Container (full/shallow)', ...
+         'Model (blank=none; Default/Tight/Wide Model)'}, ...
+        'Confirm trial info', 1, ...
+        {it.material, '', defH, defT, it.container, opts.model});
     if isempty(fields), fprintf('Cancelled.\n'); return; end
 
-    m = build_meta(fields{1}, fields{2}, str2double(fields{3}), str2double(fields{4}), fields{5});
+    m = build_meta(fields{1}, fields{2}, str2double(fields{3}), str2double(fields{4}), ...
+                   fields{5}, fields{6});
     outRoot = resolve_output_root(CFG.outputRoot);
     if isempty(outRoot), fprintf('Cancelled.\n'); return; end
     [framesDir, detDir, resultsDir] = build_leaf_dirs(outRoot, m);
@@ -108,7 +129,7 @@ function run_single(CFG)
     cfg.interactive = false;
     cfg.makeQA      = isfield(opts,'makeQA') && isequal(opts.makeQA, true);
     fprintf('Processing single trial: %s\n', m.trialTag);
-    
+
     try
         st = process_one_trial(cfg);
         if ~st.ok && st.partial
@@ -129,22 +150,29 @@ function run_batch(CFG, inputRoot, opts)
 
     % ── Options dialog (interactive only) ────────────────────────────────
     if opts.fromMenu
-        a = inputdlg({'Batch label (blank = none in path)','Limit (0 = all)'}, ...
-                     'Batch options', 1, {opts.batchLabel, num2str(opts.limit)});
+        a = inputdlg({'Batch label (blank = none in path)','Limit (0 = all)', ...
+                      'Model (blank = none)'}, ...
+                     'Batch options', 1, {opts.batchLabel, num2str(opts.limit), opts.model});
         if isempty(a), fprintf('Cancelled.\n'); return; end
         opts.batchLabel = strtrim(a{1});
         opts.limit      = max(0, round(str2double(a{2})));
+        opts.model      = strtrim(a{3});
 
         pol = menu('Redo policy', ...
             'reuse  : keep frames+detections, recompute tracks (default)', ...
             'resume : skip trials already done', ...
+            'retry  : skip done trials, RE-DETECT the ones that failed', ...
             'overwrite : redo everything');
         if pol == 0, fprintf('Cancelled.\n'); return; end
-        pols = {'reuse','resume','overwrite'}; opts.policy = pols{pol};
+        pols = {'reuse','resume','retry','overwrite'}; opts.policy = pols{pol};
 
         dr = menu('Run type', 'Dry run (list only, no processing)', 'Process for real');
         if dr == 0, fprintf('Cancelled.\n'); return; end
         opts.dryRun = (dr == 1);
+    end
+
+    if ~isempty(opts.model)
+        fprintf('Model: %s  (tag suffix + path level + per-model calibration)\n', opts.model);
     end
 
     % ── Gather videos ────────────────────────────────────────────────────
@@ -172,13 +200,14 @@ function run_batch(CFG, inputRoot, opts)
 
     % ── Dry run ──────────────────────────────────────────────────────────
     if opts.dryRun
-        print_and_save_dryrun(items, outRoot, opts.batchLabel, inputDesc);
+        print_and_save_dryrun(items, outRoot, opts.batchLabel, inputDesc, opts.model);
         return;
     end
 
     % ── Process (crash-safe incremental log) ─────────────────────────────
     total = numel(items);
-    fprintf('Processing %d videos  (policy=%s, batch="%s")\n\n', total, opts.policy, opts.batchLabel);
+    fprintf('Processing %d videos  (policy=%s, batch="%s", model="%s")\n\n', ...
+            total, opts.policy, opts.batchLabel, opts.model);
     L = log_init(fullfile(outRoot,'03_RESULTS','_batch_logs'), inputDesc, total, opts);
 
     nOK = 0; nPartial = 0; nFailed = 0; nSkipped = 0;
@@ -194,10 +223,11 @@ function run_batch(CFG, inputRoot, opts)
             log_row(L, i, total, r); continue;
         end
 
-        m = build_meta(it.material, opts.batchLabel, it.dropHeight_mm, it.trialNum, it.container);
+        m = build_meta(it.material, opts.batchLabel, it.dropHeight_mm, it.trialNum, ...
+                       it.container, opts.model);
         [framesDir, detDir, resultsDir] = build_leaf_dirs(outRoot, m);
 
-        if strcmp(opts.policy,'resume') && ...
+        if any(strcmp(opts.policy,{'resume','retry'})) && ...
            exist(fullfile(resultsDir,'tracks',[m.trialTag '_tracks.mat']),'file')
             nSkipped = nSkipped + 1;
             r = row_from_item(it, opts.batchLabel, 'SKIPPED', 'already processed', NaN, NaN, resultsDir);
@@ -207,14 +237,44 @@ function run_batch(CFG, inputRoot, opts)
 
         cfg = base_cfg(CFG, m, it.fullpath, framesDir, detDir, resultsDir);
         cfg.interactive = false; cfg.makeQA = true;
-        if strcmp(opts.policy,'overwrite')
-            cfg.reuseFrames = false; cfg.reuseDetections = false;
-        else
-            cfg.reuseFrames = true;  cfg.reuseDetections = true;
+        switch opts.policy
+            case 'overwrite'
+                cfg.reuseFrames = false; cfg.reuseDetections = false;
+            case 'retry'
+                % Frames are fine; the DETECTIONS are what failed. Reusing them
+                % would reproduce the failure exactly, so force a fresh pass.
+                cfg.reuseFrames = true;  cfg.reuseDetections = false;
+            otherwise
+                cfg.reuseFrames = true;  cfg.reuseDetections = true;
         end
 
         try
             st = process_one_trial(cfg);
+
+            % ── Pass 2: automatic recovery on a marker-count failure ──────
+            % Only fires when pass 1 found no frame with the expected marker
+            % count, and only if backup parameters were supplied. Everything
+            % else (a read error, a QA failure) is left alone.
+            if ~st.ok && ~st.partial && ~isempty(fieldnames(opts.backupParams)) ...
+                      && contains(lower(st.reason), 'detected markers')
+                fprintf('  Pass 1 found no valid frame. Retrying with backup parameters:\n');
+                cfg2 = cfg;
+                cfg2.reuseFrames = true; cfg2.reuseDetections = false;
+                bf = fieldnames(opts.backupParams);
+                for bi = 1:numel(bf)
+                    cfg2.params.(bf{bi}) = opts.backupParams.(bf{bi});
+                    fprintf('    %s = %s\n', bf{bi}, mat2str(opts.backupParams.(bf{bi})));
+                end
+                st2 = process_one_trial(cfg2);
+                if st2.ok || st2.partial
+                    fprintf('  Pass 2 SUCCEEDED.\n');
+                    st = st2;
+                    st.reason = strtrim(['recovered on pass 2; ' st.reason]);
+                else
+                    fprintf('  Pass 2 also failed: %s\n', st2.reason);
+                    st.reason = [st.reason ' (pass 2 also failed)'];
+                end
+            end
             if st.ok
                 nOK = nOK + 1; statusStr = 'OK'; reason = '';
                 fprintf('\n');
@@ -247,8 +307,9 @@ end
 % ═════════════════════════════════════════════════════════════════════════
 %  MODE 3 — RERUN / DEBUG
 % ═════════════════════════════════════════════════════════════════════════
-function run_rerun(CFG, target)
+function run_rerun(CFG, target, opts)
     clc; fprintf('\n=== RERUN SELECTED ===\n');
+    if nargin < 3 || ~isstruct(opts), opts = normalize_opts(struct()); end
     if isempty(target)
         [file, inDir] = uigetfile({'*.avi;*.AVI;*.mp4;*.MP4;*.mov;*.MOV','Video Files'}, ...
             'Select the video for the trial to rerun');
@@ -260,11 +321,14 @@ function run_rerun(CFG, target)
 
     fields = inputdlg( ...
         {'Material (GB/CHIN)','Batch (blank=none)','Drop height (mm)', ...
-         'Trial number','Container (full/shallow)'}, ...
+         'Trial number','Container (full/shallow)', ...
+         'Model (blank=none; Default/Tight/Wide Model)'}, ...
         'Confirm trial info', 1, ...
-        {it.material, '', num2str(it.dropHeight_mm), num2str(it.trialNum), it.container});
+        {it.material, '', num2str(it.dropHeight_mm), num2str(it.trialNum), ...
+         it.container, opts.model});
     if isempty(fields), fprintf('Cancelled.\n'); return; end
-    m = build_meta(fields{1}, fields{2}, str2double(fields{3}), str2double(fields{4}), fields{5});
+    m = build_meta(fields{1}, fields{2}, str2double(fields{3}), str2double(fields{4}), ...
+                   fields{5}, fields{6});
 
     outRoot = resolve_output_root(CFG.outputRoot);
     if isempty(outRoot), fprintf('Cancelled.\n'); return; end
@@ -305,8 +369,15 @@ function opts = normalize_opts(opts)
     if ~isfield(opts,'limit')   || isempty(opts.limit),   opts.limit   = 0;     end
     if ~isfield(opts,'batchLabel'),                       opts.batchLabel = ''; end
     if ~isfield(opts,'policy')  || isempty(opts.policy),  opts.policy  = 'reuse'; end
+    if ~isfield(opts,'backupParams')
+        % Pass-2 recovery: only used when pass 1 finds no valid frame.
+        opts.backupParams = struct('sensitivity',0.92, 'edgeThresh',0.06, ...
+                                   'radiusRange',[7 36]);
+    end
     if ~isfield(opts,'videoListFile'),                    opts.videoListFile = ''; end
+    if ~isfield(opts,'model')   || isempty(opts.model),   opts.model   = ''; end
     opts.policy = lower(char(opts.policy));
+    opts.model  = strtrim(char(opts.model));
 end
 
 function md = normalize_mode(mode)
@@ -334,7 +405,10 @@ function params = default_detect_params()
     params.heightLabel       = '';
 end
 
-function m = build_meta(material, batchName, dropHeight_mm, trialNum, container)
+function m = build_meta(material, batchName, dropHeight_mm, trialNum, container, model)
+    % model is optional. When '' the tag is exactly what it was before models
+    % existed, so previously processed trials keep resolving to the same names.
+    if nargin < 6 || isempty(model), model = ''; end
     container = lower(strtrim(container));
     if isempty(container), container = 'full'; end
     m = struct();
@@ -343,9 +417,17 @@ function m = build_meta(material, batchName, dropHeight_mm, trialNum, container)
     m.dropHeight_mm   = dropHeight_mm;
     m.trialNum        = trialNum;
     m.container       = container;
+    m.model           = strtrim(char(model));
     m.heightLabel     = sprintf('%dmm', round(dropHeight_mm));
     m.trialParent     = sprintf('%dmm_T%02d', round(dropHeight_mm), trialNum);
-    m.trialTag        = sprintf('%s_%s', m.trialParent, container);
+    if isempty(m.model)
+        m.trialTag = sprintf('%s_%s', m.trialParent, container);
+    else
+        % 'Tight Model' -> 'tight'. Appended so the same drop height and trial
+        % number in a different model cannot collide on disk.
+        suffix     = lower(char(erase(string(m.model), [" Model","Model"," ","_"])));
+        m.trialTag = sprintf('%s_%s_%s', m.trialParent, container, suffix);
+    end
     m.firstValidFrame = NaN;
     m.fps_true        = NaN;
 end
@@ -358,7 +440,13 @@ function cfg = base_cfg(CFG, m, videoPath, framesDir, detDir, resultsDir)
     cfg.resultsDir       = resultsDir;
     cfg.meta             = m;
     cfg.params           = CFG.params;
-    cfg.calib            = CFG.calib;
+    % Per-model calibration: bed points and impactDistPx were measured per foot.
+    % Falls back to the single global calibration when no model is set.
+    if isfield(m,'model') && ~isempty(m.model)
+        cfg.calib = get_calibration_model(m.model, m.dropHeight_mm, m.container);
+    else
+        cfg.calib = CFG.calib;
+    end
     cfg.nExpectedMarkers = CFG.nExpectedMarkers;
     cfg.filterType       = CFG.filterType;
     cfg.interactive      = false;
@@ -368,10 +456,23 @@ function cfg = base_cfg(CFG, m, videoPath, framesDir, detDir, resultsDir)
 end
 
 function [framesDir, detDir, resultsDir] = build_leaf_dirs(outputRoot, m)
+    % Model level sits directly under the batch level, so a tree written with
+    % no model is byte-identical to the pre-model layout:
+    %   with model : GB\Batch 5\Tight Model\165mm_T03\full
+    %   without    : GB\Batch 5\165mm_T03\full
+    hasModel = isfield(m,'model') && ~isempty(m.model);
     if isempty(m.batchName)
-        rel = fullfile(m.material, m.trialParent, m.container);
+        if hasModel
+            rel = fullfile(m.material, m.model, m.trialParent, m.container);
+        else
+            rel = fullfile(m.material, m.trialParent, m.container);
+        end
     else
-        rel = fullfile(m.material, m.batchName, m.trialParent, m.container);
+        if hasModel
+            rel = fullfile(m.material, m.batchName, m.model, m.trialParent, m.container);
+        else
+            rel = fullfile(m.material, m.batchName, m.trialParent, m.container);
+        end
     end
     % Exported frames are a DISPOSABLE intermediate (regenerable from the .avi).
     % To keep millions of PNGs out of Dropbox, they go under a LOCAL scratch root
@@ -385,12 +486,7 @@ function [framesDir, detDir, resultsDir] = build_leaf_dirs(outputRoot, m)
     resultsDir = fullfile(outputRoot, '03_RESULTS',          rel);
 end
 
-function outRoot = resolve_output_root(preset)
-    if ~isempty(preset), outRoot = preset; return; end
-    outRoot = uigetdir(pwd, ...
-        'Select OUTPUT root (parent of 01_FRAMES / 02_SAVED_DETECTIONS / 03_RESULTS)');
-    if isequal(outRoot, 0), outRoot = ''; end
-end
+% resolve_output_root moved to src/resolve_output_root.m (shared with track_tracers_2)
 
 function items = items_from_list(listFile)
     txt   = fileread(listFile);
@@ -410,96 +506,82 @@ function r = row_from_item(it, batchLabel, status, reason, fvf, fps, resultsDir)
         'status',status, 'reason',reason, 'resultsDir',resultsDir);
 end
 
-% ── dry-run report ────────────────────────────────────────────────────────
-function print_and_save_dryrun(items, outRoot, batchLabel, inputDesc)
-    stamp  = datestr(now, 'yyyymmdd_HHMMSS');
-    repDir = fullfile(outRoot, '03_RESULTS', '_batch_logs');
-    if ~exist(repDir, 'dir'), mkdir(repDir); end
-    repPath = fullfile(repDir, sprintf('dryrun_report_%s.txt', stamp));
-    fid = fopen(repPath, 'w');
-
-    fprintf('DRY RUN — %d videos found under %s\n\n', numel(items), inputDesc);
-    fprintf(fid, 'DRY RUN  %s\nInput: %s\nVideos found: %d\n\n', stamp, inputDesc, numel(items));
-
-    nOK = 0; nBad = 0;
+% ── dry-run report (adapter → shared src/write_dryrun_report.m) ───────────
+function print_and_save_dryrun(items, outRoot, batchLabel, inputDesc, model)
+    if nargin < 5, model = ''; end
+    rows = repmat(struct('head','','ok',false,'pathLines',{{}}), numel(items), 1);
     for i = 1:numel(items)
         it = items(i);
         if it.ok
-            nOK = nOK + 1;
-            m = build_meta(it.material, batchLabel, it.dropHeight_mm, it.trialNum, it.container);
+            m = build_meta(it.material, batchLabel, it.dropHeight_mm, it.trialNum, ...
+                           it.container, model);
             [fr, de, re] = build_leaf_dirs(outRoot, m);
-            head = sprintf('[%3d] OK   %-26s  mat=%s cont=%s drop=%gmm trial=T%02d', ...
-                i, it.name, it.material, it.container, it.dropHeight_mm, it.trialNum);
-            fprintf('%s\n', head);
-            fprintf(fid, '%s\n      frames : %s\n      detect : %s\n      results: %s\n\n', head, fr, de, re);
+            rows(i).head = sprintf(['[%3d] OK   %-26s  mat=%s cont=%s drop=%gmm ' ...
+                                    'trial=T%02d model=%s tag=%s'], ...
+                i, it.name, it.material, it.container, it.dropHeight_mm, ...
+                it.trialNum, local_dash(m.model), m.trialTag);
+            rows(i).ok        = true;
+            rows(i).pathLines = {'frames', fr; 'detect', de; 'results', re};
         else
-            nBad = nBad + 1;
-            head = sprintf('[%3d] SKIP %-26s  reason: %s', i, it.name, it.reason);
-            fprintf('%s\n', head);
-            fprintf(fid, '%s\n\n', head);
+            rows(i).head = sprintf('[%3d] SKIP %-26s  reason: %s', i, it.name, it.reason);
+            rows(i).ok   = false;
         end
     end
-    fprintf('\nDry run: %d processable, %d unparseable.\nReport: %s\n', nOK, nBad, repPath);
-    fprintf(fid, 'SUMMARY: %d processable, %d unparseable\n', nOK, nBad);
-    fclose(fid);
+    write_dryrun_report(outRoot, inputDesc, rows);
 end
 
-% ── crash-safe incremental logger (writes per trial) ──────────────────────
+% ── crash-safe incremental logger (adapters → shared src/batch_log_*.m) ────
 function L = log_init(logDir, inputDesc, total, opts)
-    if ~exist(logDir, 'dir'), mkdir(logDir); end
-    L.stamp = datestr(now, 'yyyymmdd_HHMMSS');
-    L.txt   = fullfile(logDir, sprintf('batch_log_%s.txt',      L.stamp));
-    L.csv   = fullfile(logDir, sprintf('batch_progress_%s.csv', L.stamp));
-    L.retry = fullfile(logDir, sprintf('retry_failed_%s.txt',   L.stamp));
-
-    fid = fopen(L.txt, 'w');
-    fprintf(fid, '============================================================\n');
-    fprintf(fid, ' BATCH LOG  %s\n', L.stamp);
-    fprintf(fid, ' Input  : %s\n', inputDesc);
-    fprintf(fid, ' Policy : %s   Limit : %d   Batch : "%s"\n', opts.policy, opts.limit, opts.batchLabel);
-    fprintf(fid, ' Total videos : %d\n', total);
-    fprintf(fid, '============================================================\n\n');
-    fclose(fid);
-
-    fid = fopen(L.csv, 'w');
-    fprintf(fid, ['idx,name,material,batch,dropHeight_mm,trialNum,container,', ...
-                  'status,firstValidFrame,fps,reason,resultsDir,fullpath\n']);
-    fclose(fid);
+    stamp  = datestr(now, 'yyyymmdd_HHMMSS');
+    header = sprintf([ ...
+        '============================================================\n' ...
+        ' BATCH LOG  %s\n' ...
+        ' Input  : %s\n' ...
+        ' Policy : %s   Limit : %d   Batch : "%s"\n' ...
+        ' Model  : %s\n' ...
+        ' Total videos : %d\n' ...
+        '============================================================\n\n'], ...
+        stamp, inputDesc, opts.policy, opts.limit, opts.batchLabel, ...
+        local_dash(opts.model), total);
+    csvHeader = sprintf(['idx,name,material,batch,dropHeight_mm,trialNum,container,', ...
+                         'status,firstValidFrame,fps,reason,resultsDir,fullpath\n']);
+    L = batch_log_init(logDir, stamp, ...
+        {'batch_log_','batch_progress_','retry_failed_'}, header, csvHeader);
 end
 
 function log_row(L, i, total, r)
-    fid = fopen(L.txt, 'a');     % append+close each trial => crash-safe
-    fprintf(fid, '[%3d/%3d] %-26s  %s\n', i, total, r.name, r.status);
-    fprintf(fid, '          material=%s  batch=%s  drop=%gmm  trial=%s  container=%s\n', ...
-        r.material, r.batch, r.dropHeight_mm, ttag(r.trialNum), r.container);
-    fprintf(fid, '          firstValidFrame=%s  fps=%s\n', ...
-        num2str(r.firstValidFrame), fmtn(r.fps));
-    if ~isempty(r.reason),     fprintf(fid, '          note   : %s\n', r.reason); end
-    if any(strcmpi(r.status,{'OK','PARTIAL'}))
-        fprintf(fid, '          results: %s\n', r.resultsDir);
+    txt = sprintf('[%3d/%3d] %-26s  %s\n', i, total, r.name, r.status);
+    txt = [txt sprintf('          material=%s  batch=%s  drop=%gmm  trial=%s  container=%s\n', ...
+        r.material, r.batch, r.dropHeight_mm, ttag(r.trialNum), r.container)];
+    txt = [txt sprintf('          firstValidFrame=%s  fps=%s\n', ...
+        num2str(r.firstValidFrame), fmtn(r.fps))];
+    if ~isempty(r.reason)
+        txt = [txt sprintf('          note   : %s\n', r.reason)];
     end
-    fprintf(fid, '\n');
-    fclose(fid);
+    if any(strcmpi(r.status,{'OK','PARTIAL'}))
+        txt = [txt sprintf('          results: %s\n', r.resultsDir)];
+    end
+    txt = [txt sprintf('\n')];
 
-    fid = fopen(L.csv, 'a');
-    fprintf(fid, '%d,%s,%s,%s,%g,%s,%s,%s,%s,%s,"%s",%s,%s\n', ...
+    csvRow = sprintf('%d,%s,%s,%s,%g,%s,%s,%s,%s,%s,"%s",%s,%s\n', ...
         i, r.name, r.material, r.batch, r.dropHeight_mm, ...
         num2str(r.trialNum), r.container, r.status, ...
         num2str(r.firstValidFrame), fmtn(r.fps), r.reason, r.resultsDir, r.fullpath);
-    fclose(fid);
 
+    retryLine = '';
     if any(strcmpi(r.status, {'FAILED','PARTIAL'})) && ~isempty(r.fullpath)
-        fid = fopen(L.retry, 'a'); fprintf(fid, '%s\n', r.fullpath); fclose(fid);
+        retryLine = r.fullpath;
     end
+    batch_log_row(L, txt, csvRow, retryLine);
 end
 
 function log_finalize(L, summ)
-    fid = fopen(L.txt, 'a');
-    fprintf(fid, '============================================================\n');
-    fprintf(fid, ' DONE  total=%d  OK=%d  PARTIAL=%d  FAILED=%d  SKIPPED=%d\n', ...
+    txt = sprintf([ ...
+        '============================================================\n' ...
+        ' DONE  total=%d  OK=%d  PARTIAL=%d  FAILED=%d  SKIPPED=%d\n' ...
+        '============================================================\n'], ...
         summ.total, summ.nOK, summ.nPartial, summ.nFailed, summ.nSkipped);
-    fprintf(fid, '============================================================\n');
-    fclose(fid);
+    batch_log_finalize(L, txt);
 end
 
 function s = ttag(n)
@@ -507,6 +589,9 @@ function s = ttag(n)
 end
 function s = fmtn(x)
     if isnan(x), s = 'NaN'; else, s = sprintf('%.4f', x); end
+end
+function s = local_dash(x)
+    if isempty(x), s = '(none)'; else, s = char(x); end
 end
 
 function [material, batchName] = infer_material_batch(someDir) %#ok<DEFNU>

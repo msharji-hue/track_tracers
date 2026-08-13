@@ -1,206 +1,405 @@
-%% track_tracers_2.m
-clear; close all; clc;
+function P = track_tracers_2(mode, target, opts)
+% TRACK_TRACERS_2  Kinematics pass over saved tracking outputs (Stage B).
+%
+%   Reads the tracking-only results produced by process_trial (the *_tracks.mat
+%   files under 03_RESULTS), runs the velocity-first kd_kinematics on each, and
+%   writes per-trial kinematics + a crash-safe batch log. It does NOT re-track,
+%   read frames, or touch trackedX/trackedY — tracking is already done and
+%   FPS-repaired.
+%
+%   Follows process_trial's naming/output conventions exactly and shares its
+%   helpers (resolve_output_root, write_dryrun_report, batch_log_*).
+%
+%   USAGE
+%     track_tracers_2(mode, target, opts)
+%       mode   : 'batch' (default) | 'single' | 'rerun'
+%       target : batch  -> output root (parent of 03_RESULTS), or '' to prompt
+%                single -> a trialTag (e.g. '285mm_T08_dense') or a _tracks.mat path
+%                rerun  -> a trialTag; forces overwrite for that trial
+%       opts   : .root    output root (if not given as target)
+%                .policy  'reuse'(default) | 'resume' | 'overwrite'
+%                         use 'overwrite' to FORCE reprocessing of trials
+%                         that already have a _kin.mat (otherwise SKIP(done))
+%                .limit   process only first N trials (test runs)     [0 = all]
+%                .select  cellstr of trialTags to process (test subset)
+%                .dryRun  true -> list trials + planned paths, write nothing.
+%                         Does NOT compute kinematics; use .preview for that.
+%                .preview true -> run the FULL kinematics on every selected
+%                         trial and show the figures, but write nothing to
+%                         disk: no _kin.mat, no _kin_scalars.csv, no batch log.
+%                         Forces .figures to 'show' unless it was set to
+%                         'none'. Use this to inspect the whole batch before
+%                         committing. Returns the results in the workspace via
+%                         the optional output argument.
+%                .figures 'none'(batch default) | 'show' | 'save'
+%                .massG   carriage+foot mass in grams (default 65) for f in N
+%                .model   model-level subfolder under 03_RESULTS to search,
+%                         e.g. 'Default model'  ['' = search all models]
+%
+%   OUTPUTS (per trial, sibling of the tracks/ folder — stays in the SAME tree)
+%     <...>/<container>/kinematics/<trialTag>_kin.mat          meta + kin + calib
+%     <...>/<container>/kinematics/<trialTag>_kin_scalars.csv  one-row summary
+%   Batch log -> 03_RESULTS/[<model>/]_batch_logs/kin_log_<stamp>.txt + kin_progress_<stamp>.csv
 
-%% 1) SETUP
-codeDir = '/Users/muhannadalsharji/Documents/track_tracers';
-addpath(fullfile(codeDir, 'src'));
-
-[file, detDir] = uigetfile('*.mat', 'Select detections .mat file');
-detFile        = fullfile(detDir, file);
-S_check        = load(detFile);
-framesDir      = S_check.det.meta.framesDir;
-
-metaFile = fullfile(framesDir, 'video_meta.mat');
-if exist(metaFile, 'file')
-    meta     = load(metaFile);
-    fps_true = meta.fps_true;
-    fprintf('Loaded FPS: %.4f\n', fps_true);
-else
-    fps_true = 2250;
-    warning('No video_meta.mat — using default fps=%.0f', fps_true);
-end
-
-material  = inputdlg({'Material','Batch','Height label','Trial number', ...
-                      'Freefall height (cm)'}, 'Trial Info', 1, ...
-                      {'GB','Batch 4','LDH_0','1','1'});
-trialInfo = struct('material',    material{1}, ...
-                   'batchName',   material{2}, ...
-                   'heightLabel', material{3}, ...
-                   'trialNum',    str2double(material{4}), ...
-                   'h_cm',        str2double(material{5}), ...
-                   'fps_true',    fps_true);
-
-outRoot = uigetdir(pwd, 'Select results root folder');
-for k = {'detections','tracks','kinematics','figures','qa','logs'}
-    mkdir(fullfile(outRoot, k{1}, trialInfo.heightLabel));
-end
-
-%% 2) PHYSICAL COORDINATE SYSTEM
-mmPerPx      = 0.1079;
-impactDistPx = -400;
-bedPoint1    = [23, 0];
-bedPoint2    = [23, 32];
-lineA        = bedPoint1(2) - bedPoint2(2);
-lineB        = bedPoint2(1) - bedPoint1(1);
-lineC        = bedPoint1(1)*bedPoint2(2) - bedPoint2(1)*bedPoint1(2);
-
-%% 3) TRACK
-S          = load(detFile);
-detections = S.det.detect.centersCell;
-if isempty(detections{1}), error('No detections in first frame.'); end
-
-firstFrameCenters    = detections{1};
-[trackedX, trackedY] = track_markers(detections, firstFrameCenters, 100);
-nMarkers             = size(trackedX, 1);
-cmap_markers         = lines(nMarkers);
-
-%% 4) KINEMATICS
-dt            = 1 / fps_true;
-g_cm_s2       = 980;
-postCapFrames = round(fps_true * 0.010);   % 10ms after t_stop for video
-
-[t_s, depthRod_cm, z_smooth, v_smooth, a_smooth, ...
- impact_index, refMarkerID, rodBedDist_px, stopFrame, sgOrder, sgWindow] = ...
-    toe_kinematics(trackedX, trackedY, lineA, lineB, lineC, ...
-                   dt, mmPerPx, impactDistPx, ...
-                   'postCapFrames', postCapFrames);
-
-a_plus_g   = - a_smooth - g_cm_s2;
-v0_cm_s    = v_smooth(impact_index);
-d_final_cm = z_smooth(stopFrame);
-t_stop_s   = t_s(stopFrame);
-
-fprintf('v0       = %.2f cm/s\n',  v0_cm_s);
-fprintf('z_peak   = %.3f cm\n',    d_final_cm);
-fprintf('t_stop   = %.4f s\n',     t_stop_s);
-
-%% 5) FIGURES
-% ── Shared x limits ───────────────────────────────────────────────────────
-tPre   = max(t_s(1), -0.005);
-tPost  = t_s(stopFrame);
-tRange = [tPre, tPost];
-
-% Fig 1 — Kinematics
-figure('Name','Kinematics');
-
-subplot(3,1,1)
-plot(t_s(1:stopFrame), depthRod_cm(1:stopFrame), 'k.', 'MarkerSize',4); hold on
-plot(t_s(1:stopFrame), z_smooth(1:stopFrame), 'r', 'LineWidth',1.5)
-xline(0,'--','Color',[0.5 0.5 0.5],'Label','impact','LabelVerticalAlignment','bottom');
-ylabel('depth (cm)'); xlim(tRange); legend('raw','SG','Location','northwest'); grid on
-title(sprintf('%s T%02d — Kinematics', trialInfo.heightLabel, trialInfo.trialNum));
-
-subplot(3,1,2)
-plot(t_s(1:stopFrame), v_smooth(1:stopFrame), 'b', 'LineWidth',1.5)
-xline(0,'--','Color',[0.5 0.5 0.5]);
-yline(0,'--','Color',[0.65 0.65 0.65],'LineWidth',0.8);
-ylabel('v (cm/s)'); xlim(tRange); grid on
-
-subplot(3,1,3)
-plot(t_s(1:stopFrame), a_plus_g(1:stopFrame), 'm', 'LineWidth',1.5)
-xline(0,'--','Color',[0.5 0.5 0.5]);
-yline(0,'--','Color',[0.65 0.65 0.65],'LineWidth',0.8);
-ylabel('a+g (cm/s²)'); xlabel('t (s)'); xlim(tRange); grid on
-%% Fig 2 — Tracking QA
-figure('Name','Tracking QA');
-subplot(2,1,1)
-for m = 1:nMarkers
-    plot(trackedX(m,:), '.-', 'Color',cmap_markers(m,:)); hold on
-end
-xline(impact_index,'r','impact'); xlabel('frame'); ylabel('x (px)');
-title('marker tracks'); grid on
-legend(arrayfun(@(i) sprintf('M%d',i),1:nMarkers,'UniformOutput',false), ...
-    'Location','eastoutside');
-subplot(2,1,2)
-nDetected = cellfun(@(c) size(c,1), detections);
-bar(nDetected,'FaceColor',[0.3 0.6 0.9],'EdgeColor','none');
-xline(impact_index,'r','impact'); xlabel('frame'); ylabel('n detections'); grid on
-title('detections per frame');
-
-% Fig 3 — Phase space
-figure('Name','Phase Space');
-t_norm = max(0,min(1,(t_s-t_s(impact_index))./(t_s(stopFrame)-t_s(impact_index))));
-subplot(3,1,1); scatter(z_smooth,v_smooth,20,t_norm,'filled');
-colorbar; colormap(jet); xlabel('depth (cm)'); ylabel('v (cm/s)'); grid on
-title('v vs depth (color = norm. time)');
-subplot(3,1,2); scatter(z_smooth,a_plus_g,20,t_norm,'filled');
-colorbar; xlabel('depth (cm)'); ylabel('a+g (cm/s²)'); grid on
-title('a+g vs depth');
-subplot(3,1,3); scatter(v_smooth.^2,a_plus_g,20,z_smooth,'filled');
-colorbar; colormap(parula); xlabel('v² (cm²/s²)'); ylabel('a+g (cm/s²)'); grid on
-title('Katsuragi Fig 3a: a+g vs v²');
-
-% Fig 4 — Frame QA
-figure('Name','Frame QA');
-
-frameFiles = sort({dir(fullfile(framesDir,'*.png')).name});
-if isempty(frameFiles)
-    warning('No PNGs in stored framesDir — please relocate.');
-    framesDir  = uigetdir(pwd, 'Select frames folder for this trial');
-    frameFiles = sort({dir(fullfile(framesDir,'*.png')).name});
-end
-
-theta_c     = linspace(0, 2*pi, 60);
-frameIdxs   = [1, impact_index, stopFrame];
-frameTitles = {sprintf('First frame (%d)', 1), ...
-               sprintf('Impact  (%d)',  impact_index), ...
-               sprintf('Stop    (%d)',  stopFrame)};
-
-for k = 1:3
-    fi = frameIdxs(k);
-    subplot(2,3,k);
-    imshow(imread(fullfile(framesDir, frameFiles{fi}))); hold on
-    plot([bedPoint1(1) bedPoint2(1)],[bedPoint1(2) bedPoint2(2)],'--y','LineWidth',2);
-    cF = detections{fi};
-    rF = S.det.detect.radiiCell{fi};
-    for m = 1:nMarkers
-        tx = trackedX(m, fi);
-        ty = trackedY(m, fi);
-        if ~isfinite(tx) || ~isfinite(ty), continue; end
-        col_m = cmap_markers(m,:);
-        if ~isempty(cF)
-            [~, bestIdx] = min(sqrt((cF(:,1)-tx).^2 + (cF(:,2)-ty).^2));
-            r_m = rF(bestIdx);
-        else
-            r_m = 15;
-        end
-        plot(tx + r_m.*cos(theta_c), ty + r_m.*sin(theta_c), '-','Color',col_m,'LineWidth',2);
-        plot(tx, ty, '+','Color',col_m,'MarkerSize',10,'LineWidth',1.5);
+    P = table();          % defined up front so every early return is safe
+    if nargin < 1 || isempty(mode), mode = 'batch'; end
+    if nargin < 2, target = ''; end
+    if nargin < 3 || isempty(opts), opts = struct(); end
+    opts.root    = getfld(opts,'root','');
+    opts.policy  = lower(getfld(opts,'policy','reuse'));
+    opts.limit   = getfld(opts,'limit',0);
+    opts.select  = getfld(opts,'select',{});
+    opts.dryRun  = getfld(opts,'dryRun',false);
+    opts.preview = getfld(opts,'preview',false);
+    opts.figures = lower(getfld(opts,'figures','none'));
+    if opts.preview && strcmp(opts.figures,'none') && ~isfield(opts,'figures')
+        opts.figures = 'show';
     end
-    title(frameTitles{k},'FontSize',10);
+    opts.massG   = getfld(opts,'massG',65);
+    opts.model   = getfld(opts,'model','');   % e.g. 'Default model'; '' = search all
+    mode = lower(strtrim(mode));
+
+    thisDir = fileparts(mfilename('fullpath'));
+    codeDir = fileparts(thisDir);
+    addpath(fullfile(codeDir,'src'));
+    calib = get_calibration();
+
+    % ── resolve output root ───────────────────────────────────────────────
+    if isempty(opts.root) && strcmp(mode,'batch') && ~isempty(target) ...
+            && ~endsWith(lower(target),'.mat')
+        opts.root = target;
+    end
+    root = resolve_output_root(opts.root);
+    if isempty(root), fprintf('Cancelled.\n'); return; end
+    resultsRoot = fullfile(root,'03_RESULTS');
+    if ~isempty(opts.model)
+        resultsRoot = fullfile(resultsRoot, opts.model);   % .../03_RESULTS/Default model
+    end
+    if ~isfolder(resultsRoot)
+        error('Results folder not found:\n  %s\nCheck ROOT and the ''model'' option.', resultsRoot);
+    end
+    logDir = fullfile(resultsRoot,'_batch_logs');           % logs stay inside the model tree
+
+    % ── discover trials ───────────────────────────────────────────────────
+    switch mode
+        case 'batch'
+            items     = discover_tracks(resultsRoot);
+            inputDesc = resultsRoot;
+        case {'single','rerun'}
+            items     = resolve_single(target, resultsRoot);
+            inputDesc = target;
+            if strcmp(mode,'rerun'), opts.policy = 'overwrite'; end
+        otherwise
+            error('Unknown mode "%s" (batch|single|rerun)', mode);
+    end
+
+    % ── filter (select / limit) ───────────────────────────────────────────
+    if ~isempty(opts.select) && ~isempty(items)
+        items = items(ismember({items.trialTag}, opts.select));
+    end
+    if opts.limit > 0 && numel(items) > opts.limit
+        items = items(1:opts.limit);
+    end
+    if isempty(items), warning('No trials matched.'); return; end
+
+    % ── dry run ───────────────────────────────────────────────────────────
+    if opts.dryRun
+        rows = repmat(struct('head','','ok',false,'pathLines',{{}}), numel(items), 1);
+        for i = 1:numel(items)
+            it  = items(i);
+            act = 'PROC';
+            if it.exists && any(strcmp(opts.policy,{'reuse','resume'})), act = 'SKIP(done)'; end
+            if it.exists && strcmp(opts.policy,'overwrite'),             act = 'OVERWRITE';  end
+            rows(i).head = sprintf('[%3d] %-10s %-22s  cond=%s drop=%gmm fps=%s', ...
+                i, act, it.trialTag, it.condition, it.dropHeight_mm, num2str(it.fps,'%.1f'));
+            rows(i).ok        = true;
+            rows(i).pathLines = {'tracks', it.tracksPath; 'kin', it.kinMat};
+        end
+        write_dryrun_report(logDir, inputDesc, rows);
+        P = table();
+        return;
+    end
+
+    PREVIEW = struct('trialTag',{},'condition',{},'dropHeight_mm',{}, ...
+                     'fps',{},'impactDistPx',{},'impact_index',{}, ...
+                     'stopFrame',{},'v0_cm_s',{},'d_final_cm',{},'t_stop_s',{});
+    P = table();
+
+    % ── process ───────────────────────────────────────────────────────────
+    if opts.preview
+        fprintf(['\nPREVIEW: computing kinematics for %d trial(s). Nothing will be\n' ...
+                 'written -- no _kin.mat, no scalars CSV, no batch log.\n\n'], numel(items));
+    end
+    stamp  = datestr(now,'yyyymmdd_HHMMSS');
+    header = sprintf([ ...
+        '============================================================\n' ...
+        ' KINEMATICS LOG  %s\n Input  : %s\n' ...
+        ' Policy : %s   Limit : %d   Figures : %s   mass : %g g\n' ...
+        ' Total trials : %d\n' ...
+        '============================================================\n\n'], ...
+        stamp, inputDesc, opts.policy, opts.limit, opts.figures, opts.massG, numel(items));
+    csvHeader = sprintf(['idx,trialTag,condition,dropHeight_mm,fps,status,', ...
+        'v0_cm_s,d_final_cm,t_stop_s,a_stop_cm_s2,reason,kinPath\n']);
+    L = batch_log_init(logDir, stamp, {'kin_log_','kin_progress_','kin_retry_'}, header, csvHeader);
+
+    nOK = 0; nSkip = 0; nFail = 0; total = numel(items);
+    for i = 1:total
+        it = items(i);
+        fprintf('[%3d/%3d] %s ...\n', i, total, it.trialTag);
+
+        if it.exists && any(strcmp(opts.policy,{'reuse','resume'}))
+            nSkip = nSkip + 1;
+            log_kin_row(L, i, total, it, 'SKIPPED', 'already has _kin.mat', []);
+            continue;
+        end
+
+        try
+            % 'calib' is requested too: Stage A saves the per-model
+            % calibration alongside the tracks, and it is used below.
+            S = load(it.tracksPath, 'meta', 'tracks', 'calib');
+        catch ME
+            nFail = nFail + 1;
+            log_kin_row(L, i, total, it, 'FAILED', ['load: ' ME.message], []);
+            continue;
+        end
+        meta = S.meta; tracks = S.tracks;
+
+        fps = resolve_fps(it.tracksPath, meta, tracks);
+        if ~isfinite(fps)
+            nFail = nFail + 1;
+            log_kin_row(L, i, total, it, 'FAILED', ...
+                'no plausible fps in [200,20000] from scalars CSV / meta / tracks', []);
+            continue;
+        end
+        it.fps = fps;
+        it.calibSource = 'global';
+        if isfield(S,'calib') && isstruct(S.calib) && isfield(S.calib,'impactDistPx')
+            it.calibSource   = 'tracks';
+            it.impactDistPx  = S.calib.impactDistPx;
+        else
+            it.impactDistPx  = NaN;
+        end
+
+        try
+            % Calibration comes from the TRACKS FILE when it is there.
+            % Stage A saves the exact calib it used, so a per-model trigger
+            % (Tight -376.001, Wide -409) flows through automatically and
+            % there is no second place to keep in sync. Calling
+            % get_calibration() here would silently apply the Default -370 to
+            % every model. Trials predating the model work have no saved
+            % calib, so they fall back to the global one -- which is the value
+            % they were tracked with anyway.
+            if isfield(S,'calib') && isstruct(S.calib) && ...
+               isfield(S.calib,'impactDistPx')
+                calibT = S.calib;
+            else
+                calibT = get_calibration();
+            end
+            kin = kd_kinematics(tracks.trackedX, tracks.trackedY, calibT, 1/fps);
+
+            % Rod rotation diagnostic: line through marker centres vs the
+            % reference (first full) frame. Scalars over impact:stop; noise
+            % floor from the quiet post-stop frames.
+            try
+                [angDeg, angS] = rod_angle(tracks.trackedX, tracks.trackedY, ...
+                    'impact', kin.impact_index, 'stop', kin.stopFrame);
+                angS.delta_deg = angDeg(:);
+                kin.rodAngle   = angS;
+            catch
+                kin.rodAngle = struct('peak_abs_deg',NaN,'peak_signed_deg',NaN, ...
+                    'net_deg',NaN,'range_deg',NaN,'noise_sd_deg',NaN, ...
+                    'peakFrame',NaN,'refFrame',NaN,'delta_deg',[]);
+            end
+        catch ME
+            nFail = nFail + 1;
+            log_kin_row(L, i, total, it, 'FAILED', ['kd_kinematics: ' ME.message], []);
+            continue;
+        end
+
+        % GB/shallow drop-height labels are REVERSED on disk. Keep the label as
+        % the identifier and attach the physical height alongside it; nothing is
+        % renamed. See src/true_drop_height.m.
+        [htrue, hcorr] = true_drop_height(getfld(meta,'dropHeight_mm',NaN), it.condition);
+        meta.dropHeight_true_mm = htrue;
+        meta.heightCorrected    = hcorr;
+        if hcorr
+            meta.heightNote = 'GB/shallow labels reversed; dropHeight_mm is the ORIGINAL label';
+        else
+            meta.heightNote = '';
+        end
+        fprintf('    calib: %s  impactDistPx = %g  (fps %.0f)\n', ...
+                it.calibSource, getfld(calibT,'impactDistPx',NaN), fps);
+
+
+        calib = calibT;                          % the calibration actually used
+        if opts.preview
+            % Everything above has run; nothing below touches the disk.
+            PREVIEW(end+1) = struct('trialTag',it.trialTag, ...
+                'condition',it.condition, 'dropHeight_mm',it.dropHeight_mm, ...
+                'fps',fps, 'impactDistPx',getfld(calib,'impactDistPx',NaN), ...
+                'impact_index',getfld(kin,'impact_index',NaN), ...
+                'stopFrame',getfld(kin,'stopFrame',NaN), ...
+                'v0_cm_s',getfld(kin,'v0_cm_s',NaN), ...
+                'd_final_cm',getfld(kin,'d_final_cm',NaN), ...
+                't_stop_s',getfld(kin,'t_stop_s',NaN)); %#ok<AGROW>
+        else
+            if ~exist(it.kinDir,'dir'), mkdir(it.kinDir); end
+            save(it.kinMat, 'meta', 'kin', 'calib', '-v7.3');
+            write_kin_scalars(it, meta, kin, calib, opts.massG);
+        end
+
+        if ~strcmp(opts.figures,'none')
+            f1 = fig_triptych(kin, meta);
+            if strcmp(opts.figures,'save')
+                saveas(f1, fullfile(it.kinDir,[it.trialTag '_kin_triptych.png']));
+                close(f1);
+            end
+        end
+
+        nOK = nOK + 1;
+        log_kin_row(L, i, total, it, 'OK', '', kin);
+    end
+
+    fin = sprintf([ ...
+        '============================================================\n' ...
+        ' DONE  total=%d  OK=%d  SKIPPED=%d  FAILED=%d\n' ...
+        '============================================================\n'], ...
+        total, nOK, nSkip, nFail);
+    batch_log_finalize(L, fin);
+    fprintf('\nKinematics batch done: OK=%d  SKIPPED=%d  FAILED=%d\nLog: %s\n', ...
+        nOK, nSkip, nFail, L.txt);
+
+    if opts.preview && ~isempty(PREVIEW)
+        P = struct2table(PREVIEW);
+        fprintf('\n=== PREVIEW SUMMARY (nothing written) ===\n');
+        fprintf('  %d trial(s) computed\n', height(P));
+        fprintf('  v0      %.1f - %.1f cm/s\n', min(P.v0_cm_s), max(P.v0_cm_s));
+        fprintf('  d_final %.3f - %.3f cm\n', min(P.d_final_cm), max(P.d_final_cm));
+        fprintf('  fps     %.0f - %.0f\n', min(P.fps), max(P.fps));
+        u = unique(P.impactDistPx);
+        fprintf('  impactDistPx in use: %s\n', strjoin(compose('%g',u'), ', '));
+        fprintf(['\n  Inspect P, then re-run without ''preview'' to write:\n' ...
+                 '    track_tracers_2(''batch'', root, struct(''figures'',''none''))\n\n']);
+    end
 end
 
-% Marker x vs time (bottom row, full width)
-subplot(2,3,[4 5 6]); hold on
-for m = 1:nMarkers
-    plot(t_s, trackedX(m,:), '-', 'Color', cmap_markers(m,:), ...
-        'LineWidth', 1.5, 'DisplayName', sprintf('M%d', m));
+% ═════════════════════════════ helpers ═══════════════════════════════════
+function v = getfld(s, f, dflt)
+    if isfield(s,f) && ~isempty(s.(f)), v = s.(f); else, v = dflt; end
 end
-xline(0,        '--','Color',[0.50 0.50 0.50],'LineWidth',1.2,...
-    'Label','impact','LabelVerticalAlignment','bottom','FontSize',9);
-xline(t_stop_s, '--','Color',[0.80 0.10 0.10],'LineWidth',1.2,...
-    'Label','stop',  'LabelVerticalAlignment','bottom','FontSize',9);
-grid on;
-xlabel('t  (s)'); ylabel('x  (px)');
-title('Marker x vs time');
-%% 6) SAVE
-kinematics = struct( ...
-    't_s',           t_s,           'depthRod_cm',  depthRod_cm,  ...
-    'z_smooth',      z_smooth,      'v_smooth',     v_smooth,     ...
-    'a_smooth',      a_smooth,      'a_plus_g',     a_plus_g,     ...
-    'trackedX',      trackedX,      'trackedY',     trackedY,     ...
-    'impact_index',  impact_index,  'stopFrame',    stopFrame,    ...
-    'postCapFrames', postCapFrames, 'refMarkerID',  refMarkerID,  ...
-    'rodBedDist_px', rodBedDist_px, 'sgOrder',      sgOrder,      ...
-    'sgWindow',      sgWindow,      'mmPerPx',      mmPerPx,      ...
-    'impactDistPx',  impactDistPx,  'bedPoint1',    bedPoint1,    ...
-    'bedPoint2',     bedPoint2,     'lineA',        lineA,        ...
-    'lineB',         lineB,         'lineC',        lineC);
+function v = fld(s, f)
+    if isfield(s,f) && ~isempty(s.(f)), v = s.(f); else, v = NaN; end
+end
 
-scalars = struct( ...
-    'v0_cm_s',    v0_cm_s,         'd_final_cm', d_final_cm, ...
-    't_stop_s',   t_stop_s,        'h_cm',       trialInfo.h_cm, ...
-    'H_cm',       trialInfo.h_cm + d_final_cm);
+function it = build_item(tp, m)
+    [~, base] = fileparts(tp);
+    tag = getfld(m,'trialTag', strrep(base,'_tracks',''));
+    it.trialTag      = tag;
+    it.material      = getfld(m,'material','');
+    it.container     = getfld(m,'container','');
+    it.condition     = sprintf('%s/%s', it.material, it.container);
+    it.dropHeight_mm = getfld(m,'dropHeight_mm',NaN);
+    it.trialNum      = getfld(m,'trialNum',NaN);
+    it.fps           = resolve_fps(tp, m, []);
+    it.tracksPath    = tp;
+    it.resultsDir    = fileparts(fileparts(tp));           % .../<container>
+    it.kinDir        = fullfile(it.resultsDir,'kinematics');
+    it.kinMat        = fullfile(it.kinDir,[tag '_kin.mat']);
+    it.exists        = exist(it.kinMat,'file') > 0;
+end
 
-save_trial(trialInfo, kinematics, scalars, [1 2 3 4], ...
-    {'kinematics','tracking_qa','phase_space','impact_qa'}, outRoot);
+function items = discover_tracks(resultsRoot)
+    D = dir(fullfile(resultsRoot,'**','*_tracks.mat'));
+    items = repmat(build_item('seed', struct()), 0, 1);   % 0x1 with right fields
+    for k = 1:numel(D)
+        tp = fullfile(D(k).folder, D(k).name);
+        try, Sm = load(tp,'meta'); m = Sm.meta; catch, continue; end
+        items(end+1) = build_item(tp, m); %#ok<AGROW>
+    end
+    if ~isempty(items)
+        keys = arrayfun(@(x) sprintf('%s_%08.1f_%04.0f', x.condition, ...
+            x.dropHeight_mm, x.trialNum), items, 'UniformOutput', false);
+        [~, ord] = sort(keys);
+        items = items(ord);
+    end
+end
+
+function items = resolve_single(target, resultsRoot)
+    if endsWith(lower(target),'.mat') && exist(target,'file')
+        tp = target;
+    else
+        D = dir(fullfile(resultsRoot,'**',[target '_tracks.mat']));
+        if isempty(D)
+            error('No _tracks.mat found for "%s" under %s', target, resultsRoot);
+        end
+        tp = fullfile(D(1).folder, D(1).name);
+    end
+    Sm = load(tp,'meta');
+    items = build_item(tp, Sm.meta);
+end
+
+function write_kin_scalars(it, meta, kin, calib, massG) %#ok<INUSD>
+    p  = fullfile(it.kinDir,[it.trialTag '_kin_scalars.csv']);
+    fid = fopen(p,'w');
+    ra = getfld(kin,'rodAngle',struct());
+    fprintf(fid, ['material,batch,dropHeight_mm,dropHeight_true_mm,heightCorrected,', ...
+        'trialNum,condition,phi,fps,', ...
+        'impact_frame,stop_frame,v0_cm_s,d_final_cm,a_stop_cm_s2,t_stop_s,', ...
+        'impactDistPx,bedX,', ...
+        'rodAngle_peak_abs_deg,rodAngle_peak_signed_deg,rodAngle_net_deg,', ...
+        'rodAngle_range_deg,rodAngle_noise_sd_deg,rodAngle_refFrame\n']);
+    fprintf(fid, ['%s,%s,%g,%g,%d,%g,%s,%.4f,%.4f,%d,%d,%.4f,%.4f,%.2f,%.6f,%g,%g,', ...
+        '%.4f,%.4f,%.4f,%.4f,%.4f,%g\n'], ...
+        getfld(meta,'material',''), getfld(meta,'batchName',''), ...
+        getfld(meta,'dropHeight_mm',NaN), getfld(meta,'dropHeight_true_mm',NaN), ...
+        double(getfld(meta,'heightCorrected',false)), getfld(meta,'trialNum',NaN), it.condition, ...
+        fld(meta,'phi'), it.fps, kin.impact_index, kin.stopFrame, ...
+        kin.v0_cm_s, kin.d_final_cm, getfld(kin,'a_stop_cm_s2',NaN), kin.t_stop_s, ...
+        getfld(calib,'impactDistPx',NaN), getfld(calib,'bedX',NaN), ...
+        getfld(ra,'peak_abs_deg',NaN), getfld(ra,'peak_signed_deg',NaN), ...
+        getfld(ra,'net_deg',NaN), getfld(ra,'range_deg',NaN), ...
+        getfld(ra,'noise_sd_deg',NaN), getfld(ra,'refFrame',NaN));
+    fclose(fid);
+end
+
+function log_kin_row(L, i, total, it, status, reason, kin)
+    if isempty(kin)
+        v0=NaN; dd=NaN; ts=NaN; as_=NaN; kp='';
+    else
+        v0=kin.v0_cm_s; dd=kin.d_final_cm; ts=kin.t_stop_s;
+        as_=getfld(kin,'a_stop_cm_s2',NaN); kp=it.kinMat;
+    end
+    txt = sprintf('[%3d/%3d] %-22s  %s\n', i, total, it.trialTag, status);
+    txt = [txt sprintf('          cond=%s  drop=%gmm  fps=%s\n', ...
+        it.condition, it.dropHeight_mm, num2str(it.fps,'%.1f'))];
+    if ~isempty(reason), txt = [txt sprintf('          note   : %s\n', reason)]; end
+    if strcmp(status,'OK')
+        txt = [txt sprintf('          v0=%.1f cm/s  d=%.3f cm  a_stop=%.1f\n', v0,dd,as_)];
+        txt = [txt sprintf('          kin    : %s\n', kp)];
+    end
+    txt = [txt sprintf('\n')];
+
+    csvRow = sprintf('%d,%s,%s,%g,%s,%s,%.4f,%.4f,%.6f,%.2f,"%s",%s\n', ...
+        i, it.trialTag, it.condition, it.dropHeight_mm, num2str(it.fps,'%.1f'), ...
+        status, v0, dd, ts, as_, reason, kp);
+
+    retryLine = '';
+    if strcmp(status,'FAILED'), retryLine = it.tracksPath; end
+    batch_log_row(L, txt, csvRow, retryLine);
+end
+
+% ── figures (test/single only) ────────────────────────────────────────────
+function f = fig_triptych(kin, meta)
+    tag = getfld(meta,'trialTag','?');
+    f = figure('Name',['Kinematics — ' tag],'Color','w');
+    t = kin.t_s;
+    subplot(3,1,1); plot(t, kin.z, '-'); grid on; ylabel('z (cm)');
+    title(sprintf('%s   (impact=%d, stop=%d)', tag, kin.impact_index, kin.stopFrame), ...
+        'Interpreter','none');
+    xline(0,'--'); xline(kin.t_stop_s,'--r');
+    subplot(3,1,2); plot(t, kin.v, '-'); grid on; ylabel('v (cm/s)');
+    xline(0,'--'); xline(kin.t_stop_s,'--r');
+    subplot(3,1,3); plot(t, kin.a_plus_g, '-'); grid on;
+    ylabel('a+g (cm/s^2)'); xlabel('t (s)'); yline(0,':');
+    xline(0,'--'); xline(kin.t_stop_s,'--r');
+end
