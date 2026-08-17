@@ -7,8 +7,7 @@ repository, and has been deleted. Nothing here described the current pipeline.
 Current documentation:
 
 - **[../README.md](../README.md)** — pipeline, calibration, capture protocol,
-  the GB/shallow height reversal, dataset state, naming, and known open issues.
-  Start here.
+  dataset state, naming, and known open issues. Start here.
 - **[QUANTITIES.md](QUANTITIES.md)** — every reported quantity defined exactly as
   the code computes it, with the file and function that produces each one. Read
   this before interpreting or plotting any output.

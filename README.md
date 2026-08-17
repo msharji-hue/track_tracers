@@ -111,44 +111,6 @@ fit a free-fall parabola against. `a_stop_cm_s2` replaced them.
 
 ---
 
-## GB/shallow height reversal
-
-**GB/shallow drop-height labels are recorded in reverse order on disk.**
-
-Nothing is renamed. Filenames, folder names, trialTags and `meta.dropHeight_mm`
-all keep the original label. `src/true_drop_height.m` is the single source of
-truth for the correction:
-
-| labelled | actual | | labelled | actual |
-|---|---|---|---|---|
-| 25 mm | 365 mm | | 285 mm | 125 mm |
-| 65 mm | 325 mm | | 325 mm | 65 mm |
-| 125 mm | 285 mm | | 365 mm | 25 mm |
-| 165 mm | 165 mm (unchanged) | | | |
-
-Only GB/shallow is altered; every other condition passes through unchanged.
-
-The map is a swap and therefore self-inverse, so it must be applied **exactly
-once**, at read time, from `true_drop_height` only. Never hardcode it elsewhere.
-
-- Use `dropHeight_true_mm` for **all** physics — v0 checks, scaling, every plot axis.
-- Use `dropHeight_mm` and `trialTag` **only** as file identifiers.
-
-`load_kinematics_set` applies the correction for you and returns
-`dropHeight_true_mm` alongside a `heightCorrected` flag.
-
-**Evidence.** With the labelled heights, GB/shallow `v0 / sqrt(2gh)` reached
-3.9–4.2 — impossible, since a ratio above 1 means faster than free fall — and
-measured v0 was nearly constant (~275, 265, 240 cm/s) across a 5× range of
-labelled heights. After correction every ratio falls to ~1.0–1.1.
-
-Depth (`d_final_cm`) is **not** affected by this correction.
-
-Markers on disk: `03_RESULTS/HEIGHT_LABELS_README.txt` and the per-folder
-`_HEIGHT_REVERSED.txt` files, both written by `scripts/write_height_labels.m`.
-
----
-
 ## Dataset state
 
 Default geometry is validated at **269 trials**:
@@ -205,6 +167,9 @@ protocol below. The model drivers (`run_models`, `run_new_models`, `run_pass2`,
 `preflight_new_models`, `review_model_trials`, `clear_model_kinematics`) serve
 the new campaign.
 
+**GB/shallow campaign retired 2026-08** pending re-acquisition with verified
+labels; archived by maintainer.
+
 ---
 
 ## Capture protocol
@@ -242,7 +207,7 @@ Both conventions therefore resolve to the same model, and mixed-campaign loads
 work without renaming anything.
 
 Model is part of the analysis group key: `depth_scaling` bins by
-`(model, condition, dropHeight_true_mm)`, so the three geometries are never
+`(model, condition, dropHeight_mm)`, so the three geometries are never
 averaged together.
 
 ---
@@ -250,7 +215,6 @@ averaged together.
 ## Rules
 
 - **Do not rename** raw videos, `*_tracks.mat`, folders, or trialTags.
-- Do not hardcode the height map anywhere outside `true_drop_height`.
 - Files whose names contain a space (Dropbox/OneDrive conflicted copies) are
   ignored by `.gitignore` and must never be committed — MATLAB cannot dispatch
   to them, so they are silently dead weight.
