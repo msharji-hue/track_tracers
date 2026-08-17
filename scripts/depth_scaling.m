@@ -95,7 +95,9 @@ K = load_kinematics_set(root, 'model', opt.model, 'condition', opt.condition, ..
                               'exclude', opt.exclude, 'depthCut', opt.DepthCut);
 
 % Fits need a real fall and a real penetration; zero-drop trials are kept by
-% the loader for the measured-d0 report but cannot enter a v0 fit.
+% the loader for the measured-d0 report but cannot enter a v0 fit. Count them
+% before the filter, since nothing downstream can see them afterwards.
+nZeroDrop = sum(K.isZeroDrop);
 K = K(~K.isZeroDrop & isfinite(K.v0_cm_s) & isfinite(K.d_final_cm) & ...
       K.v0_cm_s > 0 & K.d_final_cm > 0, :);
 if height(K) < 3
@@ -193,16 +195,17 @@ end
 fprintf('\nmeasured v0 range, cm/s (zero-drop excluded):\n');
 for mi = 1:numel(models)
     for c = 1:numel(conds)
-        m = K.model==models(mi) & K.condition==conds(c) & ~K.isZeroDrop;
+        m = K.model==models(mi) & K.condition==conds(c);
         if ~any(m), continue; end
         vv = K.v0_cm_s(m);
         fprintf('  %-8s %-16s %6.1f - %6.1f   (%4.1fx span, n = %3d)\n', ...
             models(mi), conds(c), min(vv), max(vv), max(vv)/max(min(vv),eps), sum(m));
     end
 end
-if any(K.isZeroDrop)
-    fprintf('  zero-drop rows: %d (v0 = 0 by protocol; measured values in v0_meas_cm_s)\n', ...
-            sum(K.isZeroDrop));
+if nZeroDrop > 0
+    fprintf(['  %d zero-drop trial(s) excluded from the fits (v0 = 0 by protocol;\n' ...
+             '    measured values are in v0_meas_cm_s, and load_kinematics_set\n' ...
+             '    reports the measured d0 over them)\n'], nZeroDrop);
 end
 
 % ── 4) form-specific fit ─────────────────────────────────────────────────
