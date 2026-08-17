@@ -119,7 +119,8 @@ function run_single(CFG, opts)
         {it.material, '', defH, defT, it.container, opts.model});
     if isempty(fields), fprintf('Cancelled.\n'); return; end
 
-    m = build_meta(fields{1}, fields{2}, str2double(fields{3}), str2double(fields{4}), ...
+    m = build_meta(fields{1}, normalize_batch_label(fields{2}), ...
+                   str2double(fields{3}), str2double(fields{4}), ...
                    fields{5}, fields{6});
     outRoot = resolve_output_root(CFG.outputRoot);
     if isempty(outRoot), fprintf('Cancelled.\n'); return; end
@@ -155,7 +156,7 @@ function run_batch(CFG, inputRoot, opts)
                       'Model (blank = none)'}, ...
                      'Batch options', 1, {opts.batchLabel, num2str(opts.limit), opts.model});
         if isempty(a), fprintf('Cancelled.\n'); return; end
-        opts.batchLabel = strtrim(a{1});
+        opts.batchLabel = normalize_batch_label(a{1});
         opts.limit      = max(0, round(str2double(a{2})));
         opts.model      = strtrim(a{3});
 
@@ -335,7 +336,8 @@ function run_rerun(CFG, target, opts)
         {it.material, '', num2str(it.dropHeight_mm), num2str(it.trialNum), ...
          it.container, opts.model});
     if isempty(fields), fprintf('Cancelled.\n'); return; end
-    m = build_meta(fields{1}, fields{2}, str2double(fields{3}), str2double(fields{4}), ...
+    m = build_meta(fields{1}, normalize_batch_label(fields{2}), ...
+                   str2double(fields{3}), str2double(fields{4}), ...
                    fields{5}, fields{6});
 
     outRoot = resolve_output_root(CFG.outputRoot);
@@ -371,11 +373,27 @@ end
 % ═════════════════════════════════════════════════════════════════════════
 %  HELPERS
 % ═════════════════════════════════════════════════════════════════════════
+function label = normalize_batch_label(label)
+%NORMALIZE_BATCH_LABEL  A bare number means "Batch <n>".
+%   The batch label becomes a directory level, so '5' and 'Batch 5' would
+%   otherwise create two sibling trees for the same batch and split its trials
+%   across both. Anything that is not purely digits is left exactly as typed,
+%   and empty stays empty.
+    label = strtrim(char(string(label)));
+    if isempty(label), label = ''; return; end
+    if ~isempty(regexp(label, '^\d+$', 'once'))
+        newLabel = ['Batch ' label];
+        fprintf('Batch label normalized: "%s" -> "%s"\n', label, newLabel);
+        label = newLabel;
+    end
+end
+
 function opts = normalize_opts(opts)
     if isempty(opts) || ~isstruct(opts), opts = struct(); end
     if ~isfield(opts,'dryRun')  || isempty(opts.dryRun),  opts.dryRun  = false; end
     if ~isfield(opts,'limit')   || isempty(opts.limit),   opts.limit   = 0;     end
     if ~isfield(opts,'batchLabel'),                       opts.batchLabel = ''; end
+    opts.batchLabel = normalize_batch_label(opts.batchLabel);
     if ~isfield(opts,'policy')  || isempty(opts.policy),  opts.policy  = 'reuse'; end
     if ~isfield(opts,'backupParams')
         % Pass-2 recovery: only used when pass 1 finds no valid frame.
