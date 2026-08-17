@@ -9,9 +9,8 @@ function K = load_kinematics_set(root, varargin)
 %
 %   Reads <container>/kinematics/*_kin_scalars.csv (and *_kin.mat when
 %   'series' is true). Returns one row per trial with, at minimum:
-%     trialTag, model, condition, dropHeight_mm, dropHeight_true_mm,
-%     heightCorrected, fps, impactFrame, stopFrame, v0_cm_s, d_final_cm,
-%     a_stop_cm_s2, impactDistPx, bedX
+%     trialTag, model, condition, dropHeight_mm, fps, impactFrame, stopFrame,
+%     v0_cm_s, d_final_cm, a_stop_cm_s2, impactDistPx, bedX
 %
 %   ZERO-DROP v0. The protocol defines v0 = 0 at h = 0: a d0 trial is released
 %   from contact, so there is no fall and no impact speed. v0_cm_s is therefore
@@ -20,9 +19,8 @@ function K = load_kinematics_set(root, varargin)
 %   large one flags a trial that was dropped rather than released. Never fit
 %   against v0_meas_cm_s; use it only to check the zero-drop trials.
 %
-%   dropHeight_true_mm MUST come from true_drop_height() -- GB/shallow labels
-%   are reversed on disk. Use it for every height axis; dropHeight_mm and
-%   trialTag are identifiers only.
+%   dropHeight_mm is the physical drop height and is the column every height
+%   axis should use. trialTag is an identifier only.
 %
 %   Replaces load_default_gb, which hardcoded GB/full + Default geometry and
 %   one manual exclusion list. The inclusion rules that were baked into that
@@ -108,18 +106,13 @@ tag=tag(ok); cond=cond(ok); mdl=mdl(ok); hLab=hLab(ok); d=d(ok); v0=v0(ok);
 tstop=tstop(ok); phi=phi(ok); fps=fps(ok); impF=impF(ok); stopF=stopF(ok);
 aSt=aSt(ok); idp=idp(ok); bedX=bedX(ok); kp=kp(ok);
 
-% ── the height correction, applied exactly once, here ────────────────────
-% Never read dropHeight_mm as a physical height downstream: for GB/shallow it
-% is the reversed label. true_drop_height is the single source of truth.
-[hTrue, wasCorr] = true_drop_height(hLab, cond);
-
-K = table(tag, mdl, cond, hLab, hTrue(:), wasCorr(:), fps, impF, stopF, ...
+K = table(tag, mdl, cond, hLab, fps, impF, stopF, ...
           v0, d, tstop, aSt, phi, idp, bedX, kp, ...
     'VariableNames', {'trialTag','model','condition','dropHeight_mm', ...
-        'dropHeight_true_mm','heightCorrected','fps','impactFrame','stopFrame', ...
+        'fps','impactFrame','stopFrame', ...
         'v0_cm_s','d_final_cm','t_stop_s','a_stop_cm_s2','phi', ...
         'impactDistPx','bedX','kinPath'});
-K.isZeroDrop = K.dropHeight_true_mm == 0;
+K.isZeroDrop = K.dropHeight_mm == 0;
 
 % Zero-drop protocol: a d0 trial is released FROM CONTACT, so the impact speed
 % is defined to be zero. What kd_kinematics reports for those trials is the
@@ -225,12 +218,8 @@ if opt.verbose
     fprintf('\n--- loaded set ---\n');
     DR = K(~K.isZeroDrop,:);  D0 = K(K.isZeroDrop,:);
     fprintf('  drop-height trials : %3d over %d heights\n', ...
-        height(DR), numel(unique(DR.dropHeight_true_mm)));
+        height(DR), numel(unique(DR.dropHeight_mm)));
     fprintf('  zero-drop trials   : %3d\n', height(D0));
-    if any(K.heightCorrected)
-        fprintf('  GB/shallow heights corrected on %d rows (labels reversed on disk)\n', ...
-                sum(K.heightCorrected));
-    end
     cs = unique(K.condition);
     for c = 1:numel(cs)
         fprintf('    %-16s %3d\n', cs(c), sum(K.condition==cs(c)));

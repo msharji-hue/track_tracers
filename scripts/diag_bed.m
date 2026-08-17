@@ -80,12 +80,10 @@ function R = diag_bed(tracksPath, varargin)
     kin = kd_kinematics(X, Y, calib, 1/fps);
     fprintf('\nresulting: impact=%d  stop=%d  preFrames=%d  v0=%.1f cm/s  d=%.3f cm\n', ...
         kin.impact_index, kin.stopFrame, kin.impact_index-1, kin.v0_cm_s, kin.d_final_cm);
-    % Physical height, not the label: GB/shallow labels are reversed on disk,
-    % and using the label here made the free-fall ratio read 3.9-4.2.
-    hTrue_mm = true_drop_height(m.dropHeight_mm, m.condition);
-    v0ff     = sqrt(2*calib.g_cm_s2*(hTrue_mm/10));
-    fprintf('           v0 free-fall(%g mm true) = %.1f cm/s   ratio = %.2f\n', ...
-        hTrue_mm, v0ff, kin.v0_cm_s/v0ff);
+    h_mm = m.dropHeight_mm;
+    v0ff = sqrt(2*calib.g_cm_s2*(h_mm/10));
+    fprintf('           v0 free-fall(%g mm) = %.1f cm/s   ratio = %.2f\n', ...
+        h_mm, v0ff, kin.v0_cm_s/v0ff);
 
     R = struct('trialTag',m.trialTag,'refID',refID,'ff',ff,'ref',ref, ...
         'range',[min(refFin) max(refFin)],'reaches',reaches,'kin',kin,'calib',calib);

@@ -47,7 +47,7 @@ function T = audit_all_trials(root, varargin)
     tag=strings(n,1); cond=tag; bedu=tag; flg=tag;
     hmm=nan(n,1); imf=hmm; stf=hmm; pre=hmm; v0m=hmm; v0f=hmm; rat=hmm;
     dfin=hmm; dovr=hmm; ddel=hmm; npo=hmm; rbmin=hmm; rbmax=hmm; inr=false(n,1);
-    astp=hmm; htrue=hmm; v0ft=hmm; ratt=hmm; trig=hmm;
+    astp=hmm; trig=hmm;
     gmdl=strings(n,1);
     pass=false(n,1); rev=false(n,1);
     SER = cell(n,1);            % trimmed series for the per-condition figures
@@ -101,14 +101,6 @@ function T = audit_all_trials(root, varargin)
             v0f(k)=sqrt(2*g*(hmm(k)/10));  rat(k)=v0m(k)/v0f(k);
         else
             v0f(k)=NaN;                    rat(k)=NaN;
-        end
-        %  GB/shallow labels are REVERSED on disk -- see src/true_drop_height.m.
-        %  Physics must use the TRUE height; the label stays as an identifier.
-        htrue(k) = true_drop_height(hmm(k), cond(k));
-        if htrue(k) > 0
-            v0ft(k) = sqrt(2*g*(htrue(k)/10));  ratt(k) = v0m(k)/v0ft(k);
-        else
-            v0ft(k) = NaN;                      ratt(k) = NaN;
         end
         trig(k)  = calibT.impactDistPx;
         dfin(k)=kin.d_final_cm;
@@ -168,14 +160,14 @@ function T = audit_all_trials(root, varargin)
     end
 
     keep = tag~="";
-    T = table(gmdl(keep),cond(keep),hmm(keep),htrue(keep),tag(keep),bedu(keep),trig(keep), ...
+    T = table(gmdl(keep),cond(keep),hmm(keep),tag(keep),bedu(keep),trig(keep), ...
               imf(keep),stf(keep),pre(keep), ...
-              v0m(keep),v0f(keep),rat(keep),v0ft(keep),ratt(keep),dfin(keep),astp(keep), ...
+              v0m(keep),v0f(keep),rat(keep),dfin(keep),astp(keep), ...
               dovr(keep),ddel(keep),npo(keep), ...
               rbmin(keep),rbmax(keep),inr(keep),flg(keep),pass(keep),rev(keep), ...
-        'VariableNames',{'model','condition','dropHeight_mm','dropHeight_true_mm','trialTag', ...
+        'VariableNames',{'model','condition','dropHeight_mm','trialTag', ...
         'bedline','impactDistPx_used','impactFrame','stopFrame','preFrames', ...
-        'v0_meas','v0_ff','ratio','v0_ff_true','ratio_true','d_final_cm','a_stop_cm_s2', ...
+        'v0_meas','v0_ff','ratio','d_final_cm','a_stop_cm_s2', ...
         'd_override_cm','dDelta_cm','nPost','rodBedMin','rodBedMax','anchorInRange', ...
         'flags','passDepth','needsReview'});
     T = sortrows(T,{'condition','dropHeight_mm','trialTag'});
@@ -203,12 +195,8 @@ function T = audit_all_trials(root, varargin)
         end
     end
 
-    fprintf('\nv0 ratio (LABELLED height): median %.2f  max %.2f\n', ...
+    fprintf('\nv0 ratio (measured / sqrt(2gh)): median %.2f  max %.2f   <- should be <= ~1.1\n', ...
         median(T.ratio,'omitnan'), max(T.ratio,[],'omitnan'));
-    fprintf('v0 ratio (TRUE height)    : median %.2f  max %.2f   <- should be <= ~1.1\n', ...
-        median(T.ratio_true,'omitnan'), max(T.ratio_true,[],'omitnan'));
-    nrev = sum(T.dropHeight_mm ~= T.dropHeight_true_mm);
-    fprintf('height labels corrected   : %d trial(s) (GB/shallow)\n', nrev);
     fprintf('\nfigures: one per condition x geometry\n');
     disp(groupsummary(T,{'condition','model'}))
 

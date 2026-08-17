@@ -163,7 +163,7 @@ What `kd_kinematics` reports for those trials is the velocity peak of a release
 transient, so it is kept as `v0_meas_cm_s` for QA — a large value flags a trial
 that was dropped rather than released — and never fitted against.
 
-A free-fall cross-check `v0_ff = sqrt(2*g*h_true)` and the ratio
+A free-fall cross-check `v0_ff = sqrt(2*g*h_cm)` and the ratio
 `v0_ratio = v0_cm_s / v0_ff` are computed in `scripts/depth_scaling.m`. The ratio
 is **reported only**; `sqrt(2gh)` is never the fitted predictor, because the
 carriage runs on a rail whose friction is unmeasured, so release height is a
@@ -202,7 +202,7 @@ depth. Noted in `src/get_calibration.m`.
 
 `scripts/depth_scaling.m` → section 3, "per-height means".
 
-**Group key: `(model, condition, dropHeight_true_mm)`**, the height rounded to
+**Group key: `(model, condition, dropHeight_mm)`**, the height rounded to
 2 dp in cm (`round(S.h_cm,2)`).
 
 - `model` is in the key because the three feet are different geometries;
@@ -323,23 +323,14 @@ rather than silently mis-scale; `depth_scaling` errors on it.
 
 ## Drop height
 
-`src/true_drop_height.m` — **single source of truth. Do not hardcode the map
-anywhere else.**
+`dropHeight_mm`, read from `_kin_scalars.csv` by `src/load_kinematics_set.m`.
 
-GB/shallow drop-height labels are reversed on disk. Nothing is renamed;
-`true_drop_height` supplies the physical height. The map is a swap
-(25↔365, 65↔325, 125↔285, 165 fixed) and therefore self-inverse, so it must be
-applied **exactly once**, at read time.
+The value recorded on disk is the physical drop height, so it is used directly
+as the height axis with no correction step. `trialTag` is an identifier only.
 
-`src/load_kinematics_set.m` applies it once and returns `dropHeight_true_mm`
-plus a `heightCorrected` flag:
-
-```matlab
-[hTrue, wasCorr] = true_drop_height(hLab, cond);
-```
-
-Use `dropHeight_true_mm` for every physical axis. `dropHeight_mm` and `trialTag`
-are **identifiers only**.
+`scripts/depth_scaling.m` derives `h_cm = dropHeight_mm / 10` and the free-fall
+cross-check `v0_ff = sqrt(2*g*h_cm)` from it; see the v0 section above for why
+that cross-check is reported but never fitted against.
 
 ---
 

@@ -19,13 +19,12 @@ function R = depth_scaling(root, varargin)
 %   been measured, so h is a control setting, not a measured input. Substituting
 %   the free-fall relation H = v0^2/2g moves every law into v0 with no change of
 %   form; a 1/3 power in distance is a 2/3 power in speed. A sqrt(2gh) column is
-%   carried as v0_ff_true and reported as a cross-check ratio, but it is never
-%   the fitted predictor.
+%   carried as v0_ff and reported as a cross-check ratio, but it is never the
+%   fitted predictor.
 %
-%   THE HEIGHT AXIS IS dropHeight_true_mm
-%   GB/shallow drop-height labels are reversed on disk. load_kinematics_set
-%   applies true_drop_height once, at read time. dropHeight_mm and trialTag are
-%   identifiers only and must not reach a physical axis.
+%   THE HEIGHT AXIS IS dropHeight_mm
+%   The drop height recorded on disk is the physical height. trialTag is an
+%   identifier only and must not reach a physical axis.
 %
 %   FITS ARE TAKEN ON PER-HEIGHT MEANS, which is what the literature plots
 %   (Seguin average about ten experiments per point). Replicates are grouped by
@@ -35,7 +34,7 @@ function R = depth_scaling(root, varargin)
 %   a robustness column; their R^2 is limited by real trial-to-trial granular
 %   scatter, not by the model.
 %
-%   THE REPLICATE-GROUP KEY IS (model, condition, dropHeight_true_mm). Model is
+%   THE REPLICATE-GROUP KEY IS (model, condition, dropHeight_mm). Model is
 %   part of the key because the three feet are different geometries: averaging a
 %   Tight and a Default trial released from the same height would blend two
 %   projectiles into one point. Fits and figures follow the same grouping, so
@@ -119,7 +118,7 @@ for c = 1:numel(cs)
     K.rho_g(K.condition==cs(c)) = sub.rho_bulk_g_cm3;
 end
 
-K.h_cm      = K.dropHeight_true_mm / 10;
+K.h_cm      = K.dropHeight_mm / 10;
 K.v0_ff     = sqrt(2*G*K.h_cm);                  % cross-check only
 K.v0_ratio  = K.v0_cm_s ./ K.v0_ff;
 K.H_cm      = K.v0_cm_s.^2/(2*G) + K.d_final_cm; % total travel, from v0 not h
@@ -137,7 +136,7 @@ present   = unique(K.condition,'stable');
 conds     = [condOrder(ismember(condOrder,present)), ...
              reshape(present(~ismember(present,condOrder)),1,[])];
 
-% The replicate-group key is (model, condition, dropHeight_true_mm). Model is in
+% The replicate-group key is (model, condition, dropHeight_mm). Model is in
 % the key because the three feet are different geometries: averaging a Tight and
 % a Default trial released from the same height would blend two different
 % projectiles into one point. Before campaign 2 only Default was analysable, so
