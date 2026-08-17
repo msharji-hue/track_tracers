@@ -13,6 +13,13 @@ function K = load_kinematics_set(root, varargin)
 %     heightCorrected, fps, impactFrame, stopFrame, v0_cm_s, d_final_cm,
 %     a_stop_cm_s2, impactDistPx, bedX
 %
+%   ZERO-DROP v0. The protocol defines v0 = 0 at h = 0: a d0 trial is released
+%   from contact, so there is no fall and no impact speed. v0_cm_s is therefore
+%   set to exactly 0 on those rows. The value kd_kinematics measured is kept as
+%   v0_meas_cm_s for QA -- it is the velocity peak of a release transient, and a
+%   large one flags a trial that was dropped rather than released. Never fit
+%   against v0_meas_cm_s; use it only to check the zero-drop trials.
+%
 %   dropHeight_true_mm MUST come from true_drop_height() -- GB/shallow labels
 %   are reversed on disk. Use it for every height axis; dropHeight_mm and
 %   trialTag are identifiers only.
@@ -113,6 +120,14 @@ K = table(tag, mdl, cond, hLab, hTrue(:), wasCorr(:), fps, impF, stopF, ...
         'v0_cm_s','d_final_cm','t_stop_s','a_stop_cm_s2','phi', ...
         'impactDistPx','bedX','kinPath'});
 K.isZeroDrop = K.dropHeight_true_mm == 0;
+
+% Zero-drop protocol: a d0 trial is released FROM CONTACT, so the impact speed
+% is defined to be zero. What kd_kinematics reports for those trials is the
+% velocity peak of a release transient, not a fall, so it is a QA number rather
+% than a physical impact speed. Keep the measured value under v0_meas_cm_s and
+% set the physical column to the protocol value.
+K.v0_meas_cm_s = K.v0_cm_s;
+K.v0_cm_s(K.isZeroDrop) = 0;
 
 fprintf('kin_scalars found         : %d\n', height(K));
 

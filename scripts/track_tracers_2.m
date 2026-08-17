@@ -182,13 +182,18 @@ function P = track_tracers_2(mode, target, opts)
 
         try
             % Calibration comes from the TRACKS FILE when it is there.
-            % Stage A saves the exact calib it used, so a per-model trigger
-            % (Tight -376.001, Wide -409) flows through automatically and
-            % there is no second place to keep in sync. Calling
-            % get_calibration() here would silently apply the Default -370 to
-            % every model. Trials predating the model work have no saved
-            % calib, so they fall back to the global one -- which is the value
-            % they were tracked with anyway.
+            % Stage A saves the exact calib it used, so whatever bed line and
+            % search-window centre produced the tracks flows through
+            % automatically and there is no second place to keep in sync.
+            % Trials predating the model work have no saved calib and fall back
+            % to the global one -- which is the value they were tracked with
+            % anyway.
+            %
+            % From the 2026-08 campaign impactDistPx is a standardized -360 px
+            % for every model, so the fallback no longer risks applying one
+            % model's trigger to another. Older tracks files still carry their
+            % original per-model value, and reading it from the file keeps those
+            % trials reproducible.
             if isfield(S,'calib') && isstruct(S.calib) && ...
                isfield(S.calib,'impactDistPx')
                 calibT = S.calib;

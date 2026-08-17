@@ -68,26 +68,33 @@ camera field of view sits on the bed, so only 0–8 pre-impact frames are
 captured — too few to fit the fall parabola. Rail friction is therefore
 unmeasured, and impact velocity is taken from the imaging (`v0_cm_s`).
 
-`impactDistPx` is the signed rod-to-bed distance at contact and depends on the
-foot **model**, because each 3D-printed foot has a different rod-to-toe offset:
+`impactDistPx = -360` px, **standardized across all models and containers** for
+the 2026-08 unified campaign.
 
-| model | `impactDistPx` |
-|---|---|
-| Default | `-370` |
-| Tight | `-376.001` |
-| Wide | `-409` |
+It is the signed rod-to-bed distance at contact, but it is **not** the impact
+frame — it centres the impact *search window*. `kd_kinematics` places a
+geometric anchor at `min(abs(rodBedDist_px - impactDistPx))`, then searches
+`[anchor − 0.5·wMax, anchor + 2·wMax]` for the peak of the smoothed velocity;
+impact is that peak. The trigger only has to bracket contact so a spurious
+pre-release maximum cannot win, which is why one value serves every model.
 
 ```matlab
-calib = get_calibration();                    % Default: bedX 4, trigger -370
-calib = get_calibration([], '', 'Tight');     % -376.001
-calib = get_calibration([], '', 'Wide');      % -409
+calib = get_calibration();                    % bedX 4, trigger -360
+calib = get_calibration([], '', 'Tight');     % -360; model recorded only
+calib = get_calibration([], '', 'Wide');      % -360; model recorded only
 ```
 
-The `container` argument is accepted and recorded for provenance but **does not**
-change the trigger. An earlier per-container value of −290 for `dense` was
-tested and retired in favour of one uniform trigger. Dense trials may therefore
-report `ANCHOR_OOR`, since the top marker often does not reach −370 in those
-trials; the velocity-peak refinement still locates impact in that case.
+Retired: per-model `-370` / `-376.001` / `-409`, which tracked each 3D-printed
+foot's rod-to-toe offset — differences well inside the search window — and an
+earlier per-container `-290` for `dense`. The `model` and `container` arguments
+are still accepted and recorded for provenance, but neither changes the trigger.
+Trials whose top marker never reaches −360 may report `ANCHOR_OOR`; the
+velocity-peak refinement still locates impact in that case.
+
+**Re-validate if the camera framing changes.** The window is defined in pixels
+from the bed line, so a change of lens, working distance or crop can move the
+true impact outside it. Run `scripts/diag_impact_frame.m` on a few trials per
+model after any framing change.
 
 `impactDistPx` is defined *relative* to whichever bed line is in use, so a
 bed-line shift moves the anchor but cancels out of depth, which is measured
@@ -175,12 +182,68 @@ not against literature. Retired single-measurement values: 0.629 / 0.636 /
 
 ## Known open issues
 
-**Tight and Wide GB/full recordings are unusable.** Those clips are ~17–21 ms
-long against Default's ~1.8 s, so the impact event is not contained in them.
-Those datasets are not analysable until re-acquired or reprocessed. The model
-drivers (`run_models`, `run_new_models`, `run_pass2`, `preflight_new_models`,
-`review_model_trials`, `clear_model_kinematics`) are kept pending that
-investigation.
+**Campaign 1 Tight and Wide recordings: diagnosed, archived.** *Resolved — kept
+here because the archived data must not be re-analysed.*
+
+The clips were not short recordings. **Frames were dropped at capture.** The
+external HDD could not sustain the raw stream at 4.4–5.1 kfps, so the camera
+wrote only a fraction of the frames it reported. The survey across all 502 clips
+found a median inter-frame gap of **~42 camera frames**. What looked like a
+17–21 ms clip was a ~1.8 s event sampled at roughly 1/42 of the nominal rate.
+
+The consequence is that **the time base is invalid**, not merely coarse. Gaps are
+irregular, so no constant `dt` describes the recording and the frame index cannot
+be converted to time. Every downstream quantity — velocity, `v0`, `t_stop`,
+`a_stop` — is therefore unrecoverable from these files. Re-processing cannot fix
+this; the information was never written to disk.
+
+That dataset is **archived, not analysable**. The survey CSV written by
+`scripts/survey_capture_integrity.m` is the record of the diagnosis.
+
+Re-acquired **2026-08** at ~2.7–2.8 kfps to internal SSD, under the capture
+protocol below. The model drivers (`run_models`, `run_new_models`, `run_pass2`,
+`preflight_new_models`, `review_model_trials`, `clear_model_kinematics`) serve
+the new campaign.
+
+---
+
+## Capture protocol
+
+The rules that prevent a repeat of the dropped-frame failure. All three are
+mandatory.
+
+1. **Record to the internal SSD only.** Never capture directly to an external
+   HDD or a network location. The campaign-1 loss was a sustained-write
+   bottleneck, and it is silent — the camera reports the nominal rate whether or
+   not the frames reach disk. Move clips to external storage *after* capture.
+2. **fps ≤ 2800.** The rig's real rate is ~2700–3100, which resolves the impact
+   comfortably. Higher rates buy no useful resolution and reintroduce the write
+   bottleneck.
+3. **Acceptance-test the first drop of every session** with
+   `scripts/diag_raw_clip.m` before recording the rest. It checks the clip's
+   actual inter-frame spacing against the nominal rate. If it fails, stop and fix
+   the capture path — do not record a session on the assumption that it will be
+   repairable later. It will not be.
+
+---
+
+## Naming
+
+**From campaign 2 onward every trial carries a model suffix — including
+Default.** Trial tags end `_default`, `_tight` or `_wide`:
+
+```
+165mm_T03_full_default      165mm_T03_full_tight      165mm_T03_full_wide
+```
+
+Campaign 1 tags for Default carried no suffix (`165mm_T03_full`), which is why
+`load_kinematics_set` treats an unsuffixed tag as Default rather than unknown.
+Both conventions therefore resolve to the same model, and mixed-campaign loads
+work without renaming anything.
+
+Model is part of the analysis group key: `depth_scaling` bins by
+`(model, condition, dropHeight_true_mm)`, so the three geometries are never
+averaged together.
 
 ---
 

@@ -35,6 +35,18 @@ function R = depth_scaling(root, varargin)
 %   a robustness column; their R^2 is limited by real trial-to-trial granular
 %   scatter, not by the model.
 %
+%   THE REPLICATE-GROUP KEY IS (model, condition, dropHeight_true_mm). Model is
+%   part of the key because the three feet are different geometries: averaging a
+%   Tight and a Default trial released from the same height would blend two
+%   projectiles into one point. Fits and figures follow the same grouping, so
+%   models are never pooled back together downstream. FIT and MEANS both carry a
+%   model column, and the group mean v0 is the representative x with std(v0) as
+%   its x-uncertainty (v0_mean / v0_sd).
+%
+%   The summary prints the measured v0 span per (model, condition), excluding
+%   zero-drop trials. Read the fitted exponents against it: a narrow span leaves
+%   a power law poorly determined however good its R^2 looks.
+%
 %   USAGE
 %       R = depth_scaling('D:\ME_GRANULAB\JerboaImpact');
 %       R = depth_scaling(root,'form','powerlaw','condition','GB/full');
@@ -123,76 +135,127 @@ present   = unique(K.condition,'stable');
 conds     = [condOrder(ismember(condOrder,present)), ...
              reshape(present(~ismember(present,condOrder)),1,[])];
 
-mrows = {};
+% The replicate-group key is (model, condition, dropHeight_true_mm). Model is in
+% the key because the three feet are different geometries: averaging a Tight and
+% a Default trial released from the same height would blend two different
+% projectiles into one point. Before campaign 2 only Default was analysable, so
+% the key could omit it without effect; from campaign 2 every trial carries a
+% model suffix and it cannot.
+models = unique(K.model,'stable');
+mrows  = {};
+for mi = 1:numel(models)
 for c = 1:numel(conds)
-    S  = K(K.condition==conds(c),:);
+    S  = K(K.model==models(mi) & K.condition==conds(c),:);
+    if isempty(S), continue; end
     hr = round(S.h_cm,2);
     hs = unique(hr);
     for k = 1:numel(hs)
         g = S(hr==hs(k),:);
         if height(g) < opt.MinRep, continue; end
-        mrows{end+1} = table(conds(c), hs(k), height(g), ...
+        mrows{end+1} = table(models(mi), conds(c), hs(k), height(g), ...
             mean(g.d_final_cm), std(g.d_final_cm), ...
-            mean(g.H_cm), mean(g.v0_cm_s), ...
+            mean(g.H_cm), mean(g.v0_cm_s), std(g.v0_cm_s), ...
             mean(g.t_stop_s), std(g.t_stop_s), ...
             mean(g.dNorm), std(g.dNorm), ...
             mean(g.d0_cm), std(g.d0_cm), ...
             mean(g.d_final_cm)/mean(g.v0_cm_s)^(2/3), ...
             std(g.d_final_cm)/mean(g.v0_cm_s)^(2/3), ...
             g.rho_g(1), ...
-            'VariableNames',{'condition','h_cm','nRep','d_mean','d_sd', ...
-                'H_mean','v0_mean','tstop_mean','tstop_sd', ...
+            'VariableNames',{'model','condition','h_cm','nRep','d_mean','d_sd', ...
+                'H_mean','v0_mean','v0_sd','tstop_mean','tstop_sd', ...
                 'dNorm_mean','dNorm_sd','d0_mean','d0_sd', ...
                 'comp','comp_sd','rho_g'}); %#ok<AGROW>
     end
 end
+end
 if isempty(mrows)
     error('depth_scaling:noMeans', ...
-          'No drop setting had at least MinRep = %d trials.', opt.MinRep);
+          'No (model, condition, height) group had at least MinRep = %d trials.', ...
+          opt.MinRep);
 end
 MEANS = vertcat(mrows{:});
 
-fprintf('\nreplicate groups per condition (>= %d trials each):\n', opt.MinRep);
-for c = 1:numel(conds)
-    ng = sum(MEANS.condition==conds(c));
-    fprintf('  %-16s %2d groups%s\n', conds(c), ng, ...
-        local_tern(ng < 3,'   <-- too few to fit',''));
+fprintf('\nreplicate groups per (model, condition) (>= %d trials each):\n', opt.MinRep);
+for mi = 1:numel(models)
+    for c = 1:numel(conds)
+        ng = sum(MEANS.model==models(mi) & MEANS.condition==conds(c));
+        if ng == 0, continue; end
+        fprintf('  %-8s %-16s %2d groups%s\n', models(mi), conds(c), ng, ...
+            local_tern(ng < 3,'   <-- too few to fit',''));
+    end
+end
+
+% Measured impact-speed span per (model, condition). Zero-drop trials are
+% excluded: their v0 is 0 by protocol, so including them would report a
+% meaningless floor. This is the range the fitted exponents are constrained
+% over -- a narrow span makes a power-law exponent poorly determined however
+% good its R^2 looks.
+fprintf('\nmeasured v0 range, cm/s (zero-drop excluded):\n');
+for mi = 1:numel(models)
+    for c = 1:numel(conds)
+        m = K.model==models(mi) & K.condition==conds(c) & ~K.isZeroDrop;
+        if ~any(m), continue; end
+        vv = K.v0_cm_s(m);
+        fprintf('  %-8s %-16s %6.1f - %6.1f   (%4.1fx span, n = %3d)\n', ...
+            models(mi), conds(c), min(vv), max(vv), max(vv)/max(min(vv),eps), sum(m));
+    end
+end
+if any(K.isZeroDrop)
+    fprintf('  zero-drop rows: %d (v0 = 0 by protocol; measured values in v0_meas_cm_s)\n', ...
+            sum(K.isZeroDrop));
 end
 
 % ── 4) form-specific fit ─────────────────────────────────────────────────
+% Fits follow the same (model, condition) grouping as the means. Pooling models
+% back together at this stage would undo the point of keying the bins by model.
 rows = {};
+for mi = 1:numel(models)
 for c = 1:numel(conds)
-    M = MEANS(MEANS.condition==conds(c),:);
-    S = K(K.condition==conds(c),:);
+    M = MEANS(MEANS.model==models(mi) & MEANS.condition==conds(c),:);
+    S = K(K.model==models(mi) & K.condition==conds(c),:);
+    if isempty(S), continue; end
     if height(M) < 3
-        fprintf('  SKIPPED %s: only %d group(s) with >= %d repeats\n', ...
-                conds(c), height(M), opt.MinRep);
+        fprintf('  SKIPPED %s / %s: only %d group(s) with >= %d repeats\n', ...
+                models(mi), conds(c), height(M), opt.MinRep);
         continue
     end
     switch form
-        case 'ambroso',    rows{end+1} = local_fit_ambroso(conds(c), S, M, G);          %#ok<AGROW>
-        case 'powerlaw',   rows{end+1} = local_fit_powerlaw(conds(c), S, M);            %#ok<AGROW>
-        case 'literature', rows{end+1} = local_fit_literature(conds(c), S, M, opt, G);  %#ok<AGROW>
-        case 'velocity',   rows{end+1} = local_fit_velocity(conds(c), S, M);            %#ok<AGROW>
+        case 'ambroso',    r = local_fit_ambroso(conds(c), S, M, G);
+        case 'powerlaw',   r = local_fit_powerlaw(conds(c), S, M);
+        case 'literature', r = local_fit_literature(conds(c), S, M, opt, G);
+        case 'velocity',   r = local_fit_velocity(conds(c), S, M);
     end
+    r.model = models(mi);
+    rows{end+1} = movevars(r, 'model', 'Before', 1); %#ok<AGROW>
+end
 end
 if isempty(rows)
-    error('depth_scaling:noFits','No condition had enough replicate groups to fit.');
+    error('depth_scaling:noFits', ...
+          'No (model, condition) group had enough replicate groups to fit.');
 end
 FIT = vertcat(rows{:});
 
 % Density cross-checks that need the whole table, not one condition.
 if strcmp(form,'literature')
-    iRef = find(FIT.condition==string(opt.RefCond),1);
+    % Both predictions are "fixed projectile, vary the medium", so the reference
+    % must be the SAME model as the row being predicted. Anchoring every model
+    % to one model's reference condition would fold a geometry difference into
+    % what is meant to be a pure density comparison.
     FIT.F2_alpha_pred = nan(height(FIT),1);
     FIT.t0_pred_rho14 = nan(height(FIT),1);
-    if ~isempty(iRef)
+    for mi = 1:numel(models)
+        rowsM = find(FIT.model==models(mi));
+        iRef  = rowsM(FIT.condition(rowsM)==string(opt.RefCond));
+        if isempty(iRef), continue; end
+        iRef = iRef(1);
         % Goldman & Umbanhowar: fixed projectile -> alpha ~ rho_g^(-1/2)
-        FIT.F2_alpha_pred = FIT.F2_alpha_s(iRef) * sqrt(FIT.rho_g(iRef)./FIT.rho_g);
+        FIT.F2_alpha_pred(rowsM) = FIT.F2_alpha_s(iRef) * ...
+            sqrt(FIT.rho_g(iRef)./FIT.rho_g(rowsM));
         % Their Eq.(8): t0 ~ (rho_s/rho_g)^(1/4) sqrt(R/g) -> t0 ~ rho_g^(-1/4).
         % Evaluated at the COMMON reference speed so the comparison does not
         % depend on each condition's v0 range.
-        FIT.t0_pred_rho14 = FIT.t0_at_ref_s(iRef) * (FIT.rho_g(iRef)./FIT.rho_g).^(1/4);
+        FIT.t0_pred_rho14(rowsM) = FIT.t0_at_ref_s(iRef) * ...
+            (FIT.rho_g(iRef)./FIT.rho_g(rowsM)).^(1/4);
     end
     FIT.alpha_obs_over_pred = FIT.F2_alpha_s  ./ FIT.F2_alpha_pred;
     FIT.t0_obs_over_pred    = FIT.t0_at_ref_s ./ FIT.t0_pred_rho14;
@@ -374,30 +437,33 @@ end
 
 % ═════════════════════════════════════════════════════════════════════════
 function local_report(form, FIT, opt)
-nc = height(FIT);
+nc  = height(FIT);
+% Rows are keyed by (model, condition); label them so the two are never
+% conflated in the printed summary.
+lbl = FIT.model + " / " + FIT.condition;
 switch form
     case 'ambroso'
         fprintf('\n--- d0, the single length (from d and v_0 only) ---\n');
         for c = 1:nc
-            fprintf('  %-16s d0 = %5.3f +/- %5.3f cm   v* = %5.1f cm/s   (%2d speeds, %3d trials)\n', ...
-                FIT.condition(c), FIT.d0_cm(c), FIT.d0_sd(c), FIT.vStar(c), ...
+            fprintf('  %-26s d0 = %5.3f +/- %5.3f cm   v* = %5.1f cm/s   (%2d speeds, %3d trials)\n', ...
+                lbl(c), FIT.d0_cm(c), FIT.d0_sd(c), FIT.vStar(c), ...
                 FIT.n_speeds(c), FIT.n_trials(c));
         end
         fprintf('\n--- Collapse quality: deviation from d/d0 = (v_0/v*)^(2/3) ---\n');
         for c = 1:nc
-            fprintf('  %-16s v_0/v* spans %5.2f - %5.2f (%4.1fx)   rms deviation %5.1f%%\n', ...
-                FIT.condition(c), FIT.x_min(c), FIT.x_max(c), ...
+            fprintf('  %-26s v_0/v* spans %5.2f - %5.2f (%4.1fx)   rms deviation %5.1f%%\n', ...
+                lbl(c), FIT.x_min(c), FIT.x_max(c), ...
                 FIT.x_max(c)/FIT.x_min(c), FIT.rms_dev_pct(c));
         end
         fprintf('\n--- Compensated test: d/v_0^{2/3} is constant iff the law holds ---\n');
         for c = 1:nc
-            fprintf('  %-16s slope on log10(v_0) = %+7.4f +/- %6.4f   %s\n', ...
-                FIT.condition(c), FIT.comp_slope(c), FIT.comp_slope_se(c), ...
+            fprintf('  %-26s slope on log10(v_0) = %+7.4f +/- %6.4f   %s\n', ...
+                lbl(c), FIT.comp_slope(c), FIT.comp_slope_se(c), ...
                 local_tern(FIT.comp_flat(c),'FLAT','SLOPED -- law does not hold here'));
         end
         fprintf('\n--- Free exponent, cross-check (target 2/3 = 0.667) ---\n');
         for c = 1:nc
-            fprintf('  %-16s n = %5.3f [%5.3f, %5.3f]%s\n', FIT.condition(c), ...
+            fprintf('  %-26s n = %5.3f [%5.3f, %5.3f]%s\n', lbl(c), ...
                 FIT.exponent(c), FIT.exp_lo(c), FIT.exp_hi(c), ...
                 local_tern(FIT.exp_incl_target(c),'   2/3 in CI',''));
         end
@@ -405,15 +471,15 @@ switch form
     case 'powerlaw'
         fprintf('\n--- d ~ v0^n on per-height means (target n = 2/3 = 0.667) ---\n');
         for c = 1:nc
-            fprintf('  %-16s n = %6.3f [%6.3f, %6.3f]  K = %6.4f  R2 = %.3f  rmse = %.3f cm%s\n', ...
-                FIT.condition(c), FIT.exponent(c), FIT.exp_lo95(c), FIT.exp_hi95(c), ...
+            fprintf('  %-26s n = %6.3f [%6.3f, %6.3f]  K = %6.4f  R2 = %.3f  rmse = %.3f cm%s\n', ...
+                lbl(c), FIT.exponent(c), FIT.exp_lo95(c), FIT.exp_hi95(c), ...
                 FIT.K(c), FIT.R2_means(c), FIT.rmse_cm(c), ...
                 local_tern(FIT.exp_includes_2_3(c),'  <- 2/3 in CI',''));
         end
         fprintf('\n--- robustness: same fit on individual trials ---\n');
         for c = 1:nc
-            fprintf('  %-16s n = %6.3f [%6.3f, %6.3f]  R2 = %.3f   within-height relative SD %.1f%%\n', ...
-                FIT.condition(c), FIT.exponent_trials(c), FIT.exp_tr_lo95(c), ...
+            fprintf('  %-26s n = %6.3f [%6.3f, %6.3f]  R2 = %.3f   within-height relative SD %.1f%%\n', ...
+                lbl(c), FIT.exponent_trials(c), FIT.exp_tr_lo95(c), ...
                 FIT.exp_tr_hi95(c), FIT.R2_trials(c), FIT.within_height_relSD_pct(c));
         end
         fprintf(['  The trial-level R2 is limited by real granular scatter (the column\n' ...
@@ -421,37 +487,37 @@ switch form
 
     case 'literature'
         fprintf('\n--- Head to head on identical per-height means (lower rmse wins) ---\n');
-        fprintf('  %-16s %-22s %-22s %-22s %s\n','condition', ...
+        fprintf('  %-26s %-22s %-22s %-22s %s\n','condition', ...
                 'F1 Ambroso (1 par)','F2 linear v0 (2 par)','F3 power v0 (2 par)','best');
         for c = 1:nc
-            fprintf('  %-16s rmse %6.4f R2 %5.3f   rmse %6.4f R2 %5.3f   rmse %6.4f n %5.3f   %s\n', ...
-                FIT.condition(c), FIT.F1_rmse(c), FIT.F1_R2(c), ...
+            fprintf('  %-26s rmse %6.4f R2 %5.3f   rmse %6.4f R2 %5.3f   rmse %6.4f n %5.3f   %s\n', ...
+                lbl(c), FIT.F1_rmse(c), FIT.F1_R2(c), ...
                 FIT.F2_rmse(c), FIT.F2_R2(c), FIT.F3_rmse(c), FIT.F3_n(c), ...
                 FIT.best_form(c));
         end
         fprintf('\n--- Is velocity dependence even established? F(1,n-2) vs a constant ---\n');
         for c = 1:nc
-            fprintf('  %-16s F = %8.2f  (crit %.2f)  %s\n', FIT.condition(c), ...
+            fprintf('  %-26s F = %8.2f  (crit %.2f)  %s\n', lbl(c), ...
                 FIT.F_vs_const(c), FIT.F_crit05(c), ...
                 local_tern(FIT.vel_dep_established(c),'established', ...
                            'NOT established -- fitted parameters are meaningless here'));
         end
         fprintf('\n--- Uehara Eq.(2): d*sqrt(rho_g) ~ v0^n, C ~ 1/mu (target n = 2/3) ---\n');
         for c = 1:nc
-            fprintf('  %-16s n = %6.3f [%6.3f, %6.3f]   C = %7.4f   rho_g = %.3f g/cm^3\n', ...
-                FIT.condition(c), FIT.ueh_n(c), FIT.ueh_n_lo(c), FIT.ueh_n_hi(c), ...
+            fprintf('  %-26s n = %6.3f [%6.3f, %6.3f]   C = %7.4f   rho_g = %.3f g/cm^3\n', ...
+                lbl(c), FIT.ueh_n(c), FIT.ueh_n_lo(c), FIT.ueh_n_hi(c), ...
                 FIT.ueh_C(c), FIT.rho_g(c));
         end
         fprintf('\n--- alpha ~ rho_g^(-1/2) (Goldman & Umbanhowar, fixed projectile) ---\n');
         for c = 1:nc
-            fprintf('  %-16s alpha = %7.5f s   predicted %7.5f   obs/pred = %5.2f\n', ...
-                FIT.condition(c), FIT.F2_alpha_s(c), FIT.F2_alpha_pred(c), ...
+            fprintf('  %-26s alpha = %7.5f s   predicted %7.5f   obs/pred = %5.2f\n', ...
+                lbl(c), FIT.F2_alpha_s(c), FIT.F2_alpha_pred(c), ...
                 FIT.alpha_obs_over_pred(c));
         end
         fprintf('\n--- t_stop vs v0 at the common reference speed %g cm/s ---\n', opt.RefV0);
         for c = 1:nc
-            fprintf('  %-16s dt/dv0 = %+9.3e s/(cm/s) [%+9.3e, %+9.3e]   t0 = %.4f s%s\n', ...
-                FIT.condition(c), FIT.dtstop_dv0(c), FIT.dt_lo(c), FIT.dt_hi(c), ...
+            fprintf('  %-26s dt/dv0 = %+9.3e s/(cm/s) [%+9.3e, %+9.3e]   t0 = %.4f s%s\n', ...
+                lbl(c), FIT.dtstop_dv0(c), FIT.dt_lo(c), FIT.dt_hi(c), ...
                 FIT.t0_at_ref_s(c), local_tern(FIT.t0_extrapolated(c),'  (EXTRAPOLATED)',''));
         end
         fprintf(['  KD report that stopping time DECREASES with impact speed, so a\n' ...
@@ -460,25 +526,25 @@ switch form
     case 'velocity'
         fprintf('\n--- counts ---\n');
         for c = 1:nc
-            fprintf('  %-16s n = %3d   over %d heights\n', ...
-                FIT.condition(c), FIT.n(c), FIT.n_heights(c));
+            fprintf('  %-26s n = %3d   over %d heights\n', ...
+                lbl(c), FIT.n(c), FIT.n_heights(c));
         end
         fprintf('\n--- Fit A: free exponent, d ~ v0^n   (target n = 2/3 = 0.667) ---\n');
         for c = 1:nc
-            fprintf('  %-16s n = %6.3f  [%6.3f, %6.3f]  R2 = %.3f %s\n', ...
-                FIT.condition(c), FIT.exponent(c), FIT.exp_lo95(c), FIT.exp_hi95(c), ...
+            fprintf('  %-26s n = %6.3f  [%6.3f, %6.3f]  R2 = %.3f %s\n', ...
+                lbl(c), FIT.exponent(c), FIT.exp_lo95(c), FIT.exp_hi95(c), ...
                 FIT.R2_loglog(c), local_tern(FIT.exp_includes_2_3(c),' <- 2/3 in CI',''));
         end
         fprintf('\n--- Fit B: d = a*v0^(2/3) + d0 ---\n');
         for c = 1:nc
-            fprintf('  %-16s a = %7.4f   d0 = %6.3f cm [%6.3f, %6.3f]   R2 = %.3f   rmse = %.3f cm\n', ...
-                FIT.condition(c), FIT.slope_a(c), FIT.intercept_d0(c), ...
+            fprintf('  %-26s a = %7.4f   d0 = %6.3f cm [%6.3f, %6.3f]   R2 = %.3f   rmse = %.3f cm\n', ...
+                lbl(c), FIT.slope_a(c), FIT.intercept_d0(c), ...
                 FIT.d0_lo95(c), FIT.d0_hi95(c), FIT.R2_linear(c), FIT.rmse_cm(c));
         end
         fprintf('\n--- v0 reliability, measured / sqrt(2 g h_true) ---\n');
         for c = 1:nc
-            fprintf('  %-16s median %.2f  range %.2f - %.2f   %d trial(s) outside 0.7-1.3\n', ...
-                FIT.condition(c), FIT.v0ratio_med(c), FIT.v0ratio_min(c), ...
+            fprintf('  %-26s median %.2f  range %.2f - %.2f   %d trial(s) outside 0.7-1.3\n', ...
+                lbl(c), FIT.v0ratio_med(c), FIT.v0ratio_min(c), ...
                 FIT.v0ratio_max(c), FIT.n_v0ratio_off(c));
         end
 end
@@ -486,17 +552,21 @@ fprintf('\n');
 end
 
 % ═════════════════════════════════════════════════════════════════════════
-function local_figure(form, K, MEANS, FIT, conds, G)
+function local_figure(form, K, MEANS, FIT, conds, G) %#ok<INUSD>
 % Two panels: physical units on the left, the form's collapse on the right.
-% CHIN is drawn with open markers and dashed fits because at phi ~ 0.28 and
-% 63-110 um it sits outside the dry, noncohesive regime these laws were
-% established on; its exponent is under-constrained rather than demonstrably
-% different.
+% Colour encodes CONDITION, marker shape encodes MODEL, so the three feet stay
+% visually distinct now that the bins are keyed by (model, condition, height).
+% CHIN is drawn with open markers because at phi ~ 0.28 and 63-110 um it sits
+% outside the dry, noncohesive regime these laws were established on; its
+% exponent is under-constrained rather than demonstrably different.
 col = containers.Map({'GB/full','GB/shallow','CHIN/as_poured','CHIN/dense'}, ...
     {[0 .45 .74],[.30 .75 .93],[.85 .33 .10],[.64 .08 .18]});
-mk  = containers.Map({'GB/full','GB/shallow','CHIN/as_poured','CHIN/dense'}, ...
-    {'o','s','^','d'});
+mkModel = containers.Map({'Default','Tight','Wide'}, {'o','^','s'});
 isGB = @(s) startsWith(s,"GB");
+
+% Every (model, condition) pair actually present, in MEANS order.
+[grp, gModel, gCond] = findgroups(MEANS.model, MEANS.condition);
+nG = max(grp);
 
 fig = figure('Color','w','Position',[60 60 1180 500]); %#ok<NASGU>
 tl  = tiledlayout(1,2,'Padding','compact','TileSpacing','compact');
@@ -505,19 +575,16 @@ title(tl, sprintf('depth scaling -- form: %s', form), 'FontWeight','bold');
 % ── Panel A: d vs v0, physical units, log-log ────────────────────────────
 ax1 = nexttile(tl); hold(ax1,'on'); grid(ax1,'on'); box(ax1,'on');
 set(ax1,'XScale','log','YScale','log');
-hA = gobjects(numel(conds),1); lA = strings(numel(conds),1);
-for c = 1:numel(conds)
-    k = char(conds(c));
-    if ~isKey(col,k), continue; end
-    cc = col(k);
-    M = MEANS(MEANS.condition==conds(c),:);
+hA = gobjects(nG,1); lA = strings(nG,1);
+for g = 1:nG
+    M = MEANS(grp==g,:);
     if isempty(M), continue; end
+    [cc, mkr, fc] = local_style(gCond(g), gModel(g), col, mkModel, isGB);
     errorbar(ax1, M.v0_mean, M.d_mean, M.d_sd, 'LineStyle','none','Color',cc, ...
         'LineWidth',1.1,'CapSize',3,'HandleVisibility','off');
-    fc = local_tern(isGB(conds(c)), cc, [1 1 1]);
-    hA(c) = plot(ax1, M.v0_mean, M.d_mean, mk(k), 'LineStyle','none', ...
+    hA(g) = plot(ax1, M.v0_mean, M.d_mean, mkr, 'LineStyle','none', ...
         'MarkerSize',7, 'MarkerEdgeColor',cc, 'MarkerFaceColor',fc, 'LineWidth',1.2);
-    lA(c) = conds(c);
+    lA(g) = gModel(g) + " / " + gCond(g);
 end
 % reference slope 2/3, anchored on the data
 vv = MEANS.v0_mean;  dd = MEANS.d_mean;
@@ -534,18 +601,19 @@ legend(ax1, [hA(ok); plot(ax1,NaN,NaN,'k--')], [lA(ok); "v_0^{2/3}"], ...
 ax2 = nexttile(tl); hold(ax2,'on'); grid(ax2,'on'); box(ax2,'on');
 switch form
     case {'ambroso','literature'}
-        % d/d0 vs v0/v*, the collapse the law predicts
+        % d/d0 vs v0/v*, the collapse the law predicts. d0 is read from the fit
+        % row for the SAME (model, condition), not the first matching condition.
         set(ax2,'XScale','log','YScale','log');
-        for c = 1:numel(conds)
-            k = char(conds(c)); if ~isKey(col,k), continue; end
-            i = find(FIT.condition==conds(c),1); if isempty(i), continue; end
+        for g = 1:nG
+            i = find(FIT.model==gModel(g) & FIT.condition==gCond(g), 1);
+            if isempty(i), continue; end
             if strcmp(form,'ambroso'), d0 = FIT.d0_cm(i); else, d0 = FIT.F1_d0_cm(i); end
             vS = sqrt(2*G*d0);
-            M  = MEANS(MEANS.condition==conds(c),:);
-            fc = local_tern(isGB(conds(c)), col(k), [1 1 1]);
-            plot(ax2, M.v0_mean/vS, M.d_mean/d0, mk(k), 'LineStyle','none', ...
-                'MarkerSize',7,'MarkerEdgeColor',col(k),'MarkerFaceColor',fc, ...
-                'LineWidth',1.2, 'DisplayName',char(conds(c)));
+            M  = MEANS(grp==g,:);
+            [cc, mkr, fc] = local_style(gCond(g), gModel(g), col, mkModel, isGB);
+            plot(ax2, M.v0_mean/vS, M.d_mean/d0, mkr, 'LineStyle','none', ...
+                'MarkerSize',7,'MarkerEdgeColor',cc,'MarkerFaceColor',fc, ...
+                'LineWidth',1.2, 'DisplayName',char(gModel(g)+" / "+gCond(g)));
         end
         xl = xlim(ax2);
         plot(ax2, xl, xl.^(2/3), 'k--','LineWidth',1.2,'DisplayName','(v_0/v^*)^{2/3}');
@@ -554,22 +622,29 @@ switch form
     otherwise
         % compensated plot: d/v0^(2/3) is FLAT iff the law holds
         set(ax2,'XScale','log');
-        for c = 1:numel(conds)
-            k = char(conds(c)); if ~isKey(col,k), continue; end
-            M  = MEANS(MEANS.condition==conds(c),:);
+        for g = 1:nG
+            M = MEANS(grp==g,:);
             if isempty(M), continue; end
-            fc = local_tern(isGB(conds(c)), col(k), [1 1 1]);
+            [cc, mkr, fc] = local_style(gCond(g), gModel(g), col, mkModel, isGB);
             errorbar(ax2, M.v0_mean, M.comp, M.comp_sd, 'LineStyle','none', ...
-                'Color',col(k),'LineWidth',1.1,'CapSize',3,'HandleVisibility','off');
-            plot(ax2, M.v0_mean, M.comp, mk(k), 'LineStyle','none','MarkerSize',7, ...
-                'MarkerEdgeColor',col(k),'MarkerFaceColor',fc,'LineWidth',1.2, ...
-                'DisplayName',char(conds(c)));
+                'Color',cc,'LineWidth',1.1,'CapSize',3,'HandleVisibility','off');
+            plot(ax2, M.v0_mean, M.comp, mkr, 'LineStyle','none','MarkerSize',7, ...
+                'MarkerEdgeColor',cc,'MarkerFaceColor',fc,'LineWidth',1.2, ...
+                'DisplayName',char(gModel(g)+" / "+gCond(g)));
         end
         xlabel(ax2,'measured v_0  (cm/s)');
         ylabel(ax2,'d / v_0^{2/3}   (cm / (cm/s)^{2/3})');
         title(ax2,'Compensated: flat iff d \propto v_0^{2/3}');
 end
 legend(ax2,'Location','best','Box','off');
+end
+
+function [cc, mkr, fc] = local_style(condName, modelName, col, mkModel, isGB)
+k = char(condName);
+if isKey(col,k), cc = col(k); else, cc = [0.3 0.3 0.3]; end
+km = char(modelName);
+if isKey(mkModel,km), mkr = mkModel(km); else, mkr = 'd'; end
+if isGB(condName), fc = cc; else, fc = [1 1 1]; end
 end
 
 % ═════════════════════════════════════════════════════════════════════════
