@@ -25,6 +25,54 @@ markers, tracks from there, and writes `*_tracks.mat` plus QA overlays. Stage A
 deliberately contains **no** kinematics — no smoothing, no velocity, no event
 detection — so that a smoothing or model problem can never cost a full batch.
 
+**`autoWindow` (on by default).** Campaign-2 clips run ~12 s (~40k frames)
+around a ~2k-frame event, so exporting and detecting every frame spends nearly
+all of its time on empty bed. Before exporting, `process_trial` pre-scans the
+video once with `VideoReader` — no PNGs written, no `imfindcircles` — flagging
+frames that contain any red pixel at all (`any(R > 150 & G < 100, 'all')`, the
+same crude mask `diag_raw_clip` uses). It then exports only
+
+```
+[firstRed − pad(1),  lastRed + pad(2)]      clamped to [1, nFrames]
+```
+
+`opts.windowPad` defaults to `[200 500]`: 200 frames of pre-impact context for
+the velocity-peak search, 500 frames of settling tail for `find_stop` to
+extrapolate across. Each trial prints its decision:
+
+```
+autoWindow: frames 18240-22310 of 40116 (10.1%)
+```
+
+If no frame is flagged, the **full** range is used and `NO_RED_CONTENT` is
+warned — a clip is never silently narrowed away. The same fallback applies if
+the pre-scan throws.
+
+```matlab
+process_trial('batch', root, outRoot, struct('autoWindow', false))          % export everything
+process_trial('batch', root, outRoot, struct('windowPad', [400 800]))       % wider margins
+```
+
+`autoWindow` narrows the **export/detect range only**. It never affects which
+trials are selected, and it is independent of `dryRun` and `policy`.
+
+**Frame indices are window-relative.** `firstValidFrame` and every tracking
+index are relative to the exported window, not the video. The window's absolute
+start is recorded as `meta.windowStart` (with `windowEnd` and `autoWindow`) and
+in both scalars CSVs, so any index resolves back:
+
+```
+absolute video frame = windowStart + firstValidFrame + trackingIndex − 2
+```
+
+For a full-range export `windowStart` is 1 and this reduces to the familiar
+`firstValidFrame + index − 1`. Reused frames take their window from the PNG
+filenames on disk — `export_frames` names each file by its absolute index — so
+reusing frames exported under a different window cannot shift the offset.
+
+Stage B needs no offset: `kd_kinematics` re-zeroes time at impact and works
+entirely inside the tracked array.
+
 **Stage B — kinematics.** `track_tracers_2` drives `kd_kinematics`, which
 locates impact and stop and produces depth, velocity and the stopping
 acceleration. It follows Katsuragi & Durian (2007): velocity-first, with

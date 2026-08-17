@@ -35,6 +35,42 @@ falling back to the frame with the most visible.
 
 ---
 
+## Frame indices are window-relative
+
+`scripts/process_trial.m` → `auto_window` / `apply_auto_window`;
+`src/process_one_trial.m` step 2.
+
+Stage A exports a **window** of the video, not necessarily all of it. With
+`opts.autoWindow` (default true) the window is the red-marker span padded by
+`opts.windowPad` (default `[200 500]`), found by a pre-scan that flags frames
+where `any(R > 150 & G < 100, 'all')`. With `autoWindow` off, the window is the
+whole video.
+
+Every index downstream — the `detect_circles_per_frame` output, `firstValidFrame`,
+and therefore `impact_index` and `stopFrame` — is **relative to that window**.
+The window's absolute start is recorded as `meta.windowStart` (alongside
+`windowEnd` and `autoWindow`) and in both scalars CSVs, so any stored index can
+be resolved back to the video:
+
+```
+absolute video frame = windowStart + firstValidFrame + trackingIndex − 2
+```
+
+For a full-range export `windowStart` is 1 and this reduces to
+`firstValidFrame + trackingIndex − 1`.
+
+This offset matters only where an index is mapped **back to the raw video** —
+`src/save_tracks.m` (the `origF` column), `scripts/make_video.m`, and
+`scripts/diag_impact_frame.m`. Everything that stays inside the exported set
+(`make_annotated_frames`, `make_track_qa`) indexes the PNG list on both sides
+and needs no offset.
+
+**No timing quantity depends on it.** `kd_kinematics` builds `t = (0:nF-1)*dt`
+over the tracked array and re-zeroes it at impact, so `t_s`, `v0`, `t_stop`,
+`a_stop` and `d_final` are unchanged by where the window sits.
+
+---
+
 ## `impact_index`
 
 `src/kd_kinematics.m` → main body, step 3.

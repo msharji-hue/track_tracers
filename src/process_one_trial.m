@@ -49,25 +49,50 @@ function status = process_one_trial(cfg)
     status.fps = fps;
     m.fps_true = fps;
 
-    % ── 2) EXPORT FRAMES (all frames; firstValidFrame is the origin later) ─
+    % ── 2) EXPORT FRAMES ──────────────────────────────────────────────────
+    %   The exported set is a WINDOW of the video, not necessarily the whole of
+    %   it (see opts.autoWindow in process_trial). Every index downstream --
+    %   detections, firstValidFrame, tracking frame 1 -- is relative to this
+    %   window, so its absolute start is recorded on the meta as windowStart.
+    %   Absolute video frame = windowStart + firstValidFrame + k - 2 for
+    %   tracking frame k.
     haveFrames = isfolder(cfg.framesDir) && ...
                  ~isempty(dir(fullfile(cfg.framesDir, '*.png')));
     if cfg.reuseFrames && haveFrames
         fprintf('Reusing existing frames: %s\n', cfg.framesDir);
+        % Take the window from the filenames ON DISK, not from cfg: reused
+        % frames may have been exported under a different window, and trusting
+        % cfg here would silently shift every absolute frame index.
+        [startFrame, endFrame] = local_window_from_frames(cfg.framesDir);
+        if isnan(startFrame)
+            startFrame = 1;
+            endFrame   = floor(v.Duration * v.FrameRate);
+        end
+        fprintf('  reused window: frames %d-%d\n', startFrame, endFrame);
     else
         fprintf('Exporting frames...\n');
         if ~exist(cfg.framesDir, 'dir'), mkdir(cfg.framesDir); end
+        nAvail = floor(v.Duration * v.FrameRate);
         if cfg.interactive
             startFrame = pick_start_frame(v);
             endFrame   = pick_end_frame(v, startFrame);
+        elseif isfield(cfg,'windowStart') && ~isempty(cfg.windowStart) && ...
+               isfield(cfg,'windowEnd')   && ~isempty(cfg.windowEnd)
+            startFrame = max(1, round(cfg.windowStart));
+            endFrame   = min(nAvail, round(cfg.windowEnd));
         else
             startFrame = 1;
-            endFrame   = floor(v.Duration * v.FrameRate);
+            endFrame   = nAvail;
         end
         export_frames(v, startFrame, endFrame, cfg.framesDir, cfg.filterType);
         fps_true = fps; %#ok<NASGU>
         save(fullfile(cfg.framesDir, 'video_meta.mat'), 'fps_true');
     end
+    m.windowStart = startFrame;
+    m.windowEnd   = endFrame;
+    m.autoWindow  = isfield(cfg,'autoWindow') && isequal(cfg.autoWindow, true);
+    status.windowStart = startFrame;
+    status.windowEnd   = endFrame;
 
     % ── 3) DETECT CIRCLES ─────────────────────────────────────────────────
     detMat = fullfile(cfg.detDir, [m.trialTag '_detections.mat']);
@@ -199,4 +224,22 @@ end
 
 function s = fmt(x, f)
     if isnan(x), s = 'NaN'; else, s = sprintf(f, x); end
+end
+
+function [lo, hi] = local_window_from_frames(framesDir)
+%LOCAL_WINDOW_FROM_FRAMES  Absolute frame range of the PNGs already on disk.
+%   export_frames names every file by its ABSOLUTE video frame index
+%   (frame_%05d.png), so the exported window can be recovered from the
+%   filenames alone. Returns NaN if nothing parses.
+    lo = NaN; hi = NaN;
+    d = dir(fullfile(framesDir, 'frame_*.png'));
+    if isempty(d), return; end
+    n = nan(numel(d),1);
+    for i = 1:numel(d)
+        t = regexp(d(i).name, 'frame_(\d+)\.png$', 'tokens', 'once');
+        if ~isempty(t), n(i) = str2double(t{1}); end
+    end
+    n = n(isfinite(n));
+    if isempty(n), return; end
+    lo = min(n); hi = max(n);
 end

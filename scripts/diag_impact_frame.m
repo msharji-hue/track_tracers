@@ -39,8 +39,9 @@ function R = diag_impact_frame(trialTag, varargin)
 %   purged. This looks for the PNG first, under 01_FRAMES (honouring
 %   JERBOA_FRAMES_ROOT), and falls back to reading the frame straight out of the
 %   raw .avi. Either way the frame shown is the RAW frame
-%       rawFrame = meta.firstValidFrame + kin.impact_index - 1
-%   because kin.impact_index indexes the TRACKED array, not the video.
+%       rawFrame = meta.windowStart + meta.firstValidFrame + kin.impact_index - 2
+%   because kin.impact_index indexes the TRACKED array, firstValidFrame indexes
+%   the EXPORTED WINDOW, and windowStart places that window in the video.
 %
 %   Returns R with the located indices, the drawn geometry and the frame source,
 %   so a caller can batch this without re-deriving any of it.
@@ -119,10 +120,16 @@ end
 
 % ── 2) The frame ─────────────────────────────────────────────────────────
 fvf = meta.firstValidFrame;
-rawFrame = fvf + impact - 1;
+% Stage A may have exported only a window of the video, so firstValidFrame is
+% an index into that window. windowStart is 1 for a full-range export.
+wStart = 1;
+if isfield(meta,'windowStart') && isfinite(meta.windowStart)
+    wStart = meta.windowStart;
+end
+rawFrame = wStart + fvf + impact - 2;
 [img, frameSrc] = local_get_frame(tracksPath, meta, trialTag, rawFrame, opt);
-fprintf('  frame            : raw #%d (firstValidFrame %d + impact %d - 1)\n', ...
-    rawFrame, fvf, impact);
+fprintf('  frame            : raw #%d (windowStart %d + firstValidFrame %d + impact %d - 2)\n', ...
+    rawFrame, wStart, fvf, impact);
 fprintf('  frame source     : %s\n', frameSrc);
 
 % ── 3) Geometry to draw ──────────────────────────────────────────────────

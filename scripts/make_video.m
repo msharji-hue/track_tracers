@@ -27,9 +27,11 @@ function make_video(trialTag, style, root, varargin)
 %   same frame detect_circles_per_frame reports centres in. The points are
 %   passed straight through with no conversion.
 %
-%   FRAME RANGE. kin.impact_index and kin.stopFrame index the TRACKED array,
-%   which starts at meta.firstValidFrame in the raw video:
-%       raw frame = firstValidFrame + index - 1
+%   FRAME RANGE. kin.impact_index and kin.stopFrame index the TRACKED array.
+%   Tracking frame 1 is firstValidFrame within the EXPORTED WINDOW, and that
+%   window starts at meta.windowStart in the raw video, so
+%       raw frame = windowStart + firstValidFrame + index - 2
+%   (windowStart is 1, and this reduces to the old form, for a full export)
 %   Frames are exported starting at the padded impact frame, so the renderers
 %   see a 1-based array of their own; 'annotated' therefore receives a kin
 %   struct whose event indices have been shifted into EXPORTED-frame
@@ -67,22 +69,34 @@ S    = load(tracksPath, 'meta', 'tracks');
 meta = S.meta;
 fvf  = meta.firstValidFrame;
 
+% Stage A may have exported only a WINDOW of the video (opts.autoWindow), so
+% firstValidFrame is an index into that window, not into the video. The
+% absolute video frame for tracking index k is
+%     windowStart + firstValidFrame + k - 2
+% which reduces to the old firstValidFrame + k - 1 when the window started at
+% frame 1, i.e. for every full-range export.
+wStart = 1;
+if isfield(meta,'windowStart') && isfinite(meta.windowStart)
+    wStart = meta.windowStart;
+end
+base = wStart + fvf - 1;          % absolute frame of tracking index 1
+
 haveKin = ~isempty(K);
 if haveKin
     Kn  = load(fullfile(K(1).folder, K(1).name), 'kin');
     kin = Kn.kin;
-    startFrame = max(1, fvf + kin.impact_index - 1 - opt.PadBefore);
-    endFrame   =        fvf + kin.stopFrame    - 1 + opt.PadAfter;
-    fprintf('impact idx %d, stop idx %d, firstValidFrame %d\n', ...
-            kin.impact_index, kin.stopFrame, fvf);
+    startFrame = max(1, base + kin.impact_index - 1 - opt.PadBefore);
+    endFrame   =        base + kin.stopFrame    - 1 + opt.PadAfter;
+    fprintf('impact idx %d, stop idx %d, firstValidFrame %d, windowStart %d\n', ...
+            kin.impact_index, kin.stopFrame, fvf, wStart);
 else
     if strcmp(style,'annotated')
         error('make_video:noKinematics', ...
               ['%s has no _kin.mat (excluded trial), so the annotated style ' ...
                'has no z(t)/v(t) to plot. Use style ''tracer''.'], trialTag);
     end
-    startFrame = fvf;
-    endFrame   = fvf + meta.nTracked - 1;
+    startFrame = base;
+    endFrame   = base + meta.nTracked - 1;
     fprintf('no _kin.mat (excluded trial) -- using the full tracked span\n');
 end
 
@@ -218,12 +232,12 @@ switch style
         det = struct('detect', detectOut);
 
         % Shift the event indices from tracked-array coords into exported-frame
-        % coords. Tracked index i is raw frame (fvf + i - 1); exported frame 1
-        % is raw frame startFrame, so exported = fvf + i - startFrame.
+        % coords. Tracked index i is raw frame (base + i - 1); exported frame 1
+        % is raw frame startFrame, so exported = base + i - startFrame.
         nExported     = numel(dir(fullfile(framesDir,'*.png')));
         kinShift      = kin;
-        kinShift.impact_index = fvf + kin.impact_index - startFrame;
-        kinShift.stopFrame    = fvf + kin.stopFrame    - startFrame;
+        kinShift.impact_index = base + kin.impact_index - startFrame;
+        kinShift.stopFrame    = base + kin.stopFrame    - startFrame;
         rp.startFrame = 1;
         rp.stopFrame  = nExported;
         fprintf('exported %d frames | impact -> %d, stop -> %d (exported coords)\n', ...

@@ -7,7 +7,10 @@ function make_track_qa(meta, tracks, nDetected, outRoot)
 %   Tracking-only: no kinematics, no bending panels.
 %
 %   Indexing: tracks.trackedX columns are TRACKING-frame index (column 1 ==
-%   firstValidFrame). nDetected is indexed by ORIGINAL video frame.
+%   firstValidFrame). nDetected is indexed by EXPORTED-WINDOW frame, i.e. the
+%   sorted PNG list in framesDir. Both are window-relative, so they plot
+%   against each other directly; neither is an absolute video-frame index. Add
+%   meta.windowStart - 1 to reach the video frame.
 %
 %   NOTE: uses a fixed RGB palette rather than lines(), which is a colormap
 %   function unavailable in some headless/-batch MATLAB sessions (this caused
