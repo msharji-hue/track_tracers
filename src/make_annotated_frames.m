@@ -9,18 +9,20 @@ function make_annotated_frames(framesDir, detectOut, trackedX, trackedY, ...
 %   Per-ID colours make an ID swap immediately visible — the main tracking
 %   failure mode. Uniform colour would hide it.
 %
-%   Frame k of the output corresponds to ORIGINAL video frame
-%   (firstValidFrame + k - 1) and TRACKING frame k.
+%   Frame k of the output corresponds to EXPORTED-WINDOW frame
+%   (firstValidFrame + k - 1) and TRACKING frame k. The exported window is not
+%   necessarily the whole video (see opts.autoWindow in process_trial), so the
+%   absolute video frame is meta.windowStart + firstValidFrame + k - 2.
 %
 %   make_annotated_frames(framesDir, detectOut, trackedX, trackedY, ...
 %                         firstValidFrame, calib, outDir, ...
 %                         'scale',6, 'showIDs',false, 'maxFrames',Inf)
 %
 %   Inputs
-%     framesDir       folder of exported frame_*.png (original indexing)
+%     framesDir       folder of exported frame_*.png (window indexing)
 %     detectOut       struct from detect_circles_per_frame (centersCell/radiiCell)
 %     trackedX/Y      [nMarkers x nTrackFrames], column 1 == firstValidFrame
-%     firstValidFrame original-frame index that became tracking frame 1
+%     firstValidFrame window-frame index that became tracking frame 1
 %     calib           get_calibration() struct (bedPoint1/bedPoint2)
 %     outDir          destination for annotated PNGs
 %
@@ -56,8 +58,8 @@ function make_annotated_frames(framesDir, detectOut, trackedX, trackedY, ...
     [bx, by] = bed_endpoints(calib, W, H);
 
     for k = 1:nOut
-        origIdx = firstValidFrame + k - 1;
-        img = imread(fullfile(framesDir, files{origIdx}));
+        winIdx = firstValidFrame + k - 1;
+        img = imread(fullfile(framesDir, files{winIdx}));
         if size(img,3)==1, img = repmat(img,1,1,3); end
         img = imresize(img, S, 'nearest');           % upsample for legibility
 
@@ -65,8 +67,8 @@ function make_annotated_frames(framesDir, detectOut, trackedX, trackedY, ...
         img = draw_dashed_line(img, bx*S, by*S, uint8([255 230 50]), max(2,round(S/2)));
 
         % ── thin outline at each DETECTION (radius quality) ──────────────
-        c = detectOut.centersCell{origIdx};
-        r = detectOut.radiiCell{origIdx};
+        c = detectOut.centersCell{winIdx};
+        r = detectOut.radiiCell{winIdx};
         for i = 1:size(c,1)
             img = draw_circle(img, c(i,1)*S, c(i,2)*S, r(i)*S, uint8([255 255 255]), 2);
         end

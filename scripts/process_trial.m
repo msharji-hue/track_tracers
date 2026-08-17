@@ -128,6 +128,7 @@ function run_single(CFG, opts)
     cfg = base_cfg(CFG, m, fullfile(inDir, file), framesDir, detDir, resultsDir);
     cfg.interactive = false;
     cfg.makeQA      = isfield(opts,'makeQA') && isequal(opts.makeQA, true);
+    cfg = apply_auto_window(cfg, opts, m.trialTag);
     fprintf('Processing single trial: %s\n', m.trialTag);
 
     try
@@ -206,6 +207,12 @@ function run_batch(CFG, inputRoot, opts)
 
     % ── Process (crash-safe incremental log) ─────────────────────────────
     total = numel(items);
+    if opts.autoWindow
+        fprintf('autoWindow: ON  (pad %d before / %d after the red-marker span)\n', ...
+                opts.windowPad(1), opts.windowPad(2));
+    else
+        fprintf('autoWindow: OFF (exporting every frame)\n');
+    end
     fprintf('Processing %d videos  (policy=%s, batch="%s", model="%s")\n\n', ...
             total, opts.policy, opts.batchLabel, opts.model);
     L = log_init(fullfile(outRoot,'03_RESULTS','_batch_logs'), inputDesc, total, opts);
@@ -237,6 +244,7 @@ function run_batch(CFG, inputRoot, opts)
 
         cfg = base_cfg(CFG, m, it.fullpath, framesDir, detDir, resultsDir);
         cfg.interactive = false; cfg.makeQA = true;
+        cfg = apply_auto_window(cfg, opts, it.name);
         switch opts.policy
             case 'overwrite'
                 cfg.reuseFrames = false; cfg.reuseDetections = false;
@@ -376,8 +384,101 @@ function opts = normalize_opts(opts)
     end
     if ~isfield(opts,'videoListFile'),                    opts.videoListFile = ''; end
     if ~isfield(opts,'model')   || isempty(opts.model),   opts.model   = ''; end
+    % autoWindow narrows the EXPORT/DETECT range only. It never changes which
+    % trials are selected, and it is independent of dryRun and policy.
+    if ~isfield(opts,'autoWindow') || isempty(opts.autoWindow)
+        opts.autoWindow = true;
+    end
+    if ~isfield(opts,'windowPad') || isempty(opts.windowPad)
+        opts.windowPad = [200 500];
+    end
+    opts.windowPad = double(opts.windowPad(:).');
+    if numel(opts.windowPad) == 1, opts.windowPad = opts.windowPad([1 1]); end
     opts.policy = lower(char(opts.policy));
     opts.model  = strtrim(char(opts.model));
+end
+
+function cfg = apply_auto_window(cfg, opts, tag)
+%APPLY_AUTO_WINDOW  Attach the export/detect window to cfg, if enabled.
+%   Narrows the EXPORT/DETECT range only. Trial selection, dryRun and policy
+%   are untouched. On any pre-scan failure the window is left unset, which
+%   process_one_trial reads as the full range.
+    cfg.autoWindow = isequal(opts.autoWindow, true);
+    if ~cfg.autoWindow, return; end
+    try
+        [ws, we, info] = auto_window(cfg.videoPath, opts.windowPad, tag);
+        cfg.windowStart = ws;
+        cfg.windowEnd   = we;
+        fprintf('autoWindow: frames %d-%d of %d (%.1f%%)\n', ...
+                ws, we, info.nFrames, info.fracKept);
+    catch ME
+        cfg.autoWindow  = false;
+        cfg.windowStart = [];
+        cfg.windowEnd   = [];
+        warning('process_trial:autoWindowFailed', ...
+            ['%s: pre-scan failed (%s). Falling back to the FULL frame range ' ...
+             'so nothing is silently skipped.'], tag, ME.message);
+    end
+end
+
+% ═════════════════════════════════════════════════════════════════════════
+function [winStart, winEnd, info] = auto_window(videoPath, pad, tag)
+%AUTO_WINDOW  Frame range worth exporting, from a cheap red-presence pre-scan.
+%
+%   New-campaign clips run ~12 s (~40k frames) around a ~2k-frame event, so
+%   exporting and detecting every frame spends almost all of its time on empty
+%   bed. This walks the video once with VideoReader -- no PNG export, no
+%   imfindcircles -- and flags each frame that contains any red pixel at all:
+%
+%       any(R > 150 & G < 100, 'all')
+%
+%   the same crude mask diag_raw_clip and survey_capture_integrity use. It is
+%   deliberately not a detector: it only has to bracket the markers.
+%
+%   Window = [firstRed - pad(1), lastRed + pad(2)], clamped to [1, nFrames].
+%   pad(1) buys pre-impact context for the velocity-peak search; pad(2) buys
+%   the settling tail find_stop extrapolates across.
+%
+%   If NO frame is flagged the full range is returned with a NO_RED_CONTENT
+%   warning, so a clip is never silently narrowed to nothing.
+
+    winStart = NaN; winEnd = NaN;
+    info = struct('ok',false,'reason','','nFrames',NaN, ...
+                  'firstRed',NaN,'lastRed',NaN,'fracKept',NaN);
+
+    v  = VideoReader(videoPath);
+    nF = floor(v.Duration * v.FrameRate);
+    info.nFrames = nF;
+
+    firstRed = NaN; lastRed = NaN; k = 0;
+    while hasFrame(v)
+        k = k + 1;
+        f = readFrame(v);
+        if any(f(:,:,1) > 150 & f(:,:,2) < 100, 'all')
+            if isnan(firstRed), firstRed = k; end
+            lastRed = k;
+        end
+    end
+    if k > 0, nF = max(nF, k); info.nFrames = nF; end
+
+    if isnan(firstRed)
+        winStart = 1; winEnd = nF;
+        info.reason   = 'NO_RED_CONTENT';
+        info.fracKept = 100;
+        warning('process_trial:noRedContent', ...
+            ['%s: no frame contains red marker pixels, so the impact window ' ...
+             'could not be located. Falling back to the FULL range (1-%d) so ' ...
+             'nothing is silently skipped. Check lighting, focus, or the clip ' ...
+             'itself with scripts/diag_raw_clip.m.'], tag, nF);
+        return
+    end
+
+    info.firstRed = firstRed;
+    info.lastRed  = lastRed;
+    winStart = max(1,  firstRed - pad(1));
+    winEnd   = min(nF, lastRed  + pad(2));
+    info.ok  = true;
+    info.fracKept = 100 * (winEnd - winStart + 1) / max(nF,1);
 end
 
 function md = normalize_mode(mode)
@@ -430,6 +531,12 @@ function m = build_meta(material, batchName, dropHeight_mm, trialNum, container,
     end
     m.firstValidFrame = NaN;
     m.fps_true        = NaN;
+    % Absolute video-frame span of the exported set; filled in by
+    % process_one_trial once the window is known. Every frame index downstream
+    % is relative to windowStart.
+    m.windowStart     = NaN;
+    m.windowEnd       = NaN;
+    m.autoWindow      = false;
 end
 
 function cfg = base_cfg(CFG, m, videoPath, framesDir, detDir, resultsDir)
