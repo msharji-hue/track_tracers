@@ -299,31 +299,17 @@ end
 % 2) Fall back to the raw video. Exact stem match including the material and
 %    container folders: a substring test on the height label is not enough,
 %    since '25mm' is contained in '125mm' and '325mm'.
-V = dir(fullfile(opt.RawRoot,'**','*.avi'));
-V = V(~[V.isdir]);
-if isempty(V)
+% Shared with make_video and track_tracers_2's event-frame export. Errors here
+% mean the frame is in neither place, so wrap to say both.
+try
+    videoPath = find_raw_video(opt.RawRoot, meta);
+catch ME
     error('diag_impact_frame:noFrameNoVideo', ...
-        ['Frame %d not found under 01_FRAMES and no .avi under %s. ' ...
-         'Re-export frames or point RawRoot at the capture tree.'], ...
-        rawFrame, opt.RawRoot);
+        ['Frame %d is not under 01_FRAMES and the raw clip could not be ' ...
+         'located either.\n%s\nStage A no longer keeps frames, so either run ' ...
+         'Stage B with saveEventFrames on, or point RawRoot / JERBOA_RAW_ROOT ' ...
+         'at the capture tree.'], rawFrame, ME.message);
 end
-paths = unique(string(fullfile({V.folder}', {V.name}')));
-[~, stems] = arrayfun(@(p) fileparts(p), paths, 'UniformOutput', false);
-stems = string(stems);
-stem  = sprintf('%s_T%02d', meta.heightLabel, meta.trialNum);
-matDir  = string(filesep) + string(meta.material)  + string(filesep);
-contDir = string(filesep) + string(meta.container) + string(filesep);
-hit = strcmpi(stems, stem) & contains(paths, matDir,  'IgnoreCase', true) ...
-                           & contains(paths, contDir, 'IgnoreCase', true);
-if ~any(hit)
-    error('diag_impact_frame:noMatch', ...
-        ['Frame %d not found under 01_FRAMES, and no raw video with stem "%s" ' ...
-         'under a %s%s path in %s.'], rawFrame, stem, matDir, contDir, opt.RawRoot);
-end
-cand = paths(hit);
-orig = cand(~contains(cand, "transcoded", 'IgnoreCase', true));
-if ~isempty(orig), cand = orig; end
-videoPath = char(cand(1));
 
 v = open_video(videoPath);
 v.CurrentTime = (rawFrame - 1) / v.FrameRate;

@@ -118,39 +118,9 @@ fprintf('fps_true = %.0f (source: %s)\n', fps_true, fpsSrc);
 % and container folders. A substring test on the height label is not enough:
 % '25mm' is contained in '125mm' and '325mm', which is how an earlier version
 % opened CHIN/as_poured/125mm_T04.avi when asked for 25mm_T04_dense.
-V = dir(fullfile(opt.RawRoot,'**','*.avi'));
-V = V(~[V.isdir]);
-paths = unique(string(fullfile({V.folder}', {V.name}')));  % Windows lists *.avi/*.AVI twice
-
-stem = sprintf('%s_T%02d', meta.heightLabel, meta.trialNum);   % e.g. 25mm_T04
-[~, stems] = arrayfun(@(p) fileparts(p), paths, 'UniformOutput', false);
-stems = string(stems);
-
-matDir  = string(filesep) + string(meta.material)  + string(filesep);  % \CHIN\
-contDir = string(filesep) + string(meta.container) + string(filesep);  % \dense\
-
-hit = strcmpi(stems, stem) & contains(paths, matDir,  'IgnoreCase', true) ...
-                           & contains(paths, contDir, 'IgnoreCase', true);
-if ~any(hit)
-    error('make_video:noMatch', ...
-        'No raw video with stem "%s" under a %s%s path in %s', ...
-        stem, matDir, contDir, opt.RawRoot);
-end
-
-% Prefer the original capture over the transcoded copy: the transcoded AVIs
-% carry the 600 fps muxer artefact.
-cand = paths(hit);
-orig = cand(~contains(cand, "transcoded", 'IgnoreCase', true));
-if ~isempty(orig)
-    cand = orig;
-else
-    fprintf('only a transcoded copy exists -- fps is taken from resolve_fps\n');
-end
-if numel(cand) > 1
-    fprintf('%d candidates after filtering, using the first:\n', numel(cand));
-    fprintf('   %s\n', cand);
-end
-videoPath = char(cand(1));
+% Shared with diag_impact_frame and track_tracers_2's event-frame export, so
+% the exact-stem rule lives in exactly one place.
+videoPath = find_raw_video(opt.RawRoot, meta);
 fprintf('video: %s\n', videoPath);
 
 v        = open_video(videoPath);
