@@ -90,6 +90,15 @@ function videoPath = find_raw_video(rawRoot, meta, model)
                 stem, key, rawRoot, strjoin(cellstr(unique(candModel(candModel~=""))), ', '));
         end
         cand = cand(keep);
+    else
+        % Expected for archived campaign-1 Default raws, which predate the
+        % model level and must stay readable. Say so rather than degrade
+        % silently: without the filter, disambiguation rests entirely on the
+        % ambiguity error below, and a reader of the log should know which
+        % guard actually applied.
+        warning('find_raw_video:noModelFolders', ...
+            'find_raw_video: tree not model-organized; model filter skipped for %s', ...
+            stem);
     end
 
     % ── 3) original over transcoded (same clip, not ambiguity) ───────────
