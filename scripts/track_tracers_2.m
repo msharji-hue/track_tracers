@@ -527,7 +527,10 @@ function rng = export_event_frames(it, meta, kin, opts)
         framesDir = char(fullfile(framesRoot, '01_FRAMES', strip(rel, filesep)));
     end
 
-    videoPath = find_raw_video(opts.rawRoot, meta);
+    % Model is required: the same stem exists under every model folder.
+    mdl = '';
+    if isfield(meta,'model'), mdl = meta.model; end
+    videoPath = find_raw_video(opts.rawRoot, meta, mdl);
     v         = open_video(videoPath);
     nAvail    = floor(v.Duration * v.FrameRate);
     lo        = max(1, round(lo));

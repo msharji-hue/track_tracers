@@ -302,7 +302,13 @@ end
 % Shared with make_video and track_tracers_2's event-frame export. Errors here
 % mean the frame is in neither place, so wrap to say both.
 try
-    videoPath = find_raw_video(opt.RawRoot, meta);
+    % Model matters: the same stem exists under every model, so without it the
+    % lookup can return another model's clip. meta.model is what Stage A
+    % recorded; opt.Model only overrides when the trial carries none.
+    mdl = '';
+    if isfield(meta,'model'), mdl = meta.model; end
+    if isempty(mdl), mdl = opt.Model; end
+    videoPath = find_raw_video(opt.RawRoot, meta, mdl);
 catch ME
     error('diag_impact_frame:noFrameNoVideo', ...
         ['Frame %d is not under 01_FRAMES and the raw clip could not be ' ...
@@ -312,10 +318,36 @@ catch ME
 end
 
 v = open_video(videoPath);
+
+% Validate the frame index BEFORE seeking. Setting CurrentTime past the end
+% throws a bare MATLAB error that says nothing about why, and the usual cause
+% is not a short clip but the WRONG clip: this trial's frame index applied to
+% another trial's video. Check it here and say so.
+wStartLocal = 1;
+if isfield(meta,'windowStart') && isfinite(meta.windowStart)
+    wStartLocal = meta.windowStart;
+end
+nAvail = v.NumFrames;
+if rawFrame > nAvail || rawFrame < 1
+    error('diag_impact_frame:rawVideoMismatch', ...
+        ['RAW VIDEO MISMATCH. Frame %d was requested but %s has only %d ' ...
+         'frames.\n' ...
+         'This trial (%s, model "%s") reports windowStart %d, ' ...
+         'firstValidFrame %d, impact_index %d.\n' ...
+         'The frame index and the clip do not belong together. Most likely ' ...
+         'the located video is not this trial''s: the same filename stem ' ...
+         'exists under every model folder. Check that RawRoot / ' ...
+         'JERBOA_RAW_ROOT points at the right campaign and that the model ' ...
+         'folder for this trial contains its clip.'], ...
+        rawFrame, videoPath, nAvail, trialTag, char(string(mdl)), ...
+        wStartLocal, meta.firstValidFrame, rawFrame - wStartLocal - meta.firstValidFrame + 2);
+end
+
 v.CurrentTime = (rawFrame - 1) / v.FrameRate;
 if ~hasFrame(v)
     error('diag_impact_frame:frameBeyondEnd', ...
-        'Raw frame %d is past the end of %s.', rawFrame, videoPath);
+        'Raw frame %d is past the end of %s (reported %d frames).', ...
+        rawFrame, videoPath, nAvail);
 end
 img = readFrame(v);
 src = sprintf('raw video (%s)', videoPath);
