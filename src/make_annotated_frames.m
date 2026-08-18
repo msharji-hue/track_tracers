@@ -31,35 +31,65 @@ function make_annotated_frames(framesDir, detectOut, trackedX, trackedY, ...
 %                  frame is ~416x36 px, far too small to read at 1:1)
 %     'showIDs'    draw marker-ID numerals (default false; cramped at 36 px)
 %     'maxFrames'  cap the number of annotated frames written (default Inf)
+%     'Video'      path to the raw video. Supply this (with framesDir = '')
+%                  when Stage A streamed and wrote no PNGs: the renderer then
+%                  re-reads only the frames it actually needs, straight from
+%                  the video, instead of requiring a 01_FRAMES cache.
+%     'WindowStart' absolute video frame of window index 1. Required with
+%                  'Video', since window index k is video frame
+%                  WindowStart + k - 1.
+%     'Filter'     filter to apply to video-read frames, matching the one Stage
+%                  A used. The PNG cache stored filtered frames, so without
+%                  this the overlays would differ cosmetically between the two
+%                  paths.
 
     p = inputParser;
     addParameter(p,'scale',6);
     addParameter(p,'showIDs',false);
     addParameter(p,'maxFrames',Inf);
+    addParameter(p,'Video','');
+    addParameter(p,'WindowStart',1);
+    addParameter(p,'Filter','');
     parse(p,varargin{:});
     S       = max(1, round(p.Results.scale));
     showIDs = p.Results.showIDs;
 
     if ~exist(outDir,'dir'), mkdir(outDir); end
 
-    files = dir(fullfile(framesDir,'*.png'));
-    files = sort({files.name});
+    % Frame provider: either the PNG cache or the raw video. Both are indexed
+    % by WINDOW index, so everything below is identical either way.
+    useVideo = ~isempty(p.Results.Video);
+    if useVideo
+        vr      = VideoReader(p.Results.Video);
+        wStart  = p.Results.WindowStart;
+        nAvail  = floor(vr.Duration * vr.FrameRate);
+        nInWin  = nAvail - wStart + 1;
+        % The PNG cache held FILTERED frames, so apply the same filter here or
+        % the overlays would look different depending on how Stage A ran.
+        filt    = p.Results.Filter;
+        readWin = @(k) local_read_window_frame(vr, wStart, k, filt);
+    else
+        files   = dir(fullfile(framesDir,'*.png'));
+        files   = sort({files.name});
+        nInWin  = numel(files);
+        readWin = @(k) imread(fullfile(framesDir, files{k}));
+    end
 
     nTrack = size(trackedX,2);
-    nOut   = min([nTrack, numel(files)-firstValidFrame+1, p.Results.maxFrames]);
+    nOut   = min([nTrack, nInWin-firstValidFrame+1, p.Results.maxFrames]);
     if nOut < 1, error('make_annotated_frames: nothing to render.'); end
 
     nM   = size(trackedX,1);
     cmap = marker_palette(nM);          % fixed palette; no dependence on lines()
 
     % bed line endpoints in ORIGINAL pixel coords, extended across the frame
-    probe = imread(fullfile(framesDir, files{firstValidFrame}));
+    probe = readWin(firstValidFrame);
     H = size(probe,1); W = size(probe,2);
     [bx, by] = bed_endpoints(calib, W, H);
 
     for k = 1:nOut
         winIdx = firstValidFrame + k - 1;
-        img = imread(fullfile(framesDir, files{winIdx}));
+        img = readWin(winIdx);
         if size(img,3)==1, img = repmat(img,1,1,3); end
         img = imresize(img, S, 'nearest');           % upsample for legibility
 
@@ -168,4 +198,21 @@ function img = stamp(img, x, y, thick, col, W, H)
     yr = max(1,round(y)-thick+1):min(H,round(y)+thick-1);
     if isempty(xr) || isempty(yr), return; end
     img(yr,xr,1)=col(1); img(yr,xr,2)=col(2); img(yr,xr,3)=col(3);
+end
+
+function img = local_read_window_frame(vr, wStart, k, filterType)
+%LOCAL_READ_WINDOW_FRAME  Window index k -> the matching frame of the video.
+%   Window index k is absolute video frame wStart + k - 1. Seeks per call,
+%   which is fine here: QA renders at most a few hundred frames, unlike the
+%   detection pass which streams sequentially.
+    absFrame      = wStart + k - 1;
+    vr.CurrentTime = (absFrame - 1) / vr.FrameRate;
+    if ~hasFrame(vr)
+        error('make_annotated_frames:frameBeyondEnd', ...
+              'Video frame %d (window index %d) is past the end.', absFrame, k);
+    end
+    img = readFrame(vr);
+    if nargin >= 4 && ~isempty(filterType)
+        img = apply_filter(img, filterType);
+    end
 end

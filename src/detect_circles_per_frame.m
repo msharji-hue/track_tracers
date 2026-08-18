@@ -4,6 +4,11 @@ function detectOut = detect_circles_per_frame(framesDir, params)
 %   Inputs:
 %       framesDir  - path to folder containing frame_XXXXX.png files
 %       params     - detection parameter struct
+%
+%   This is the cached-PNG path, used when Stage A ran with keepFrames='all' or
+%   when legacy 01_FRAMES folders exist. The default Stage A path streams from
+%   the raw video instead (detect_circles_stream); both call
+%   detect_circles_frame per frame, so the detections are identical.
 
 % Get sorted list of PNGs
 files   = dir(fullfile(framesDir, '*.png'));
@@ -31,25 +36,9 @@ for i = 1:nFrames
 
     nFramesReadOK = i;
 
-    % --- Redness image ---
-    R = im2double(rgb(:,:,1));
-    G = im2double(rgb(:,:,2));
-    B = im2double(rgb(:,:,3));
-    A = max(min(R - params.alphaG.*G - params.betaB.*B, 1), 0);
-
-    if params.doCLAHE,     A = adapthisteq(A);                               end
-    if params.medianK > 1, A = medfilt2(A, [params.medianK params.medianK]); end
-
-    % --- Detect circles ---
-    try
-        [centers, radii] = imfindcircles(A, params.radiusRange, ...
-            'ObjectPolarity', params.polarity, ...
-            'Sensitivity',    params.sensitivity, ...
-            'EdgeThreshold',  params.edgeThresh);
-    catch ME
-        fprintf('Detection failed at frame %d: %s\n', i, ME.message);
-        centers = []; radii = [];
-    end
+    % Detection core is shared with detect_circles_stream, so the PNG path and
+    % the streaming path cannot drift apart.
+    [centers, radii] = detect_circles_frame(rgb, params);
 
     centersCell{i} = centers;
     radiiCell{i}   = radii;
