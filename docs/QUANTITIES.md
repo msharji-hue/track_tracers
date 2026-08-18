@@ -35,18 +35,66 @@ falling back to the frame with the most visible.
 
 ---
 
+## Frames are derived data
+
+`src/detect_circles_stream.m`; `src/process_one_trial.m` step 2.
+
+**Stage A does not keep frames.** With `keepFrames = 'none'` (the default) each
+frame is decoded from the video, filtered, detected on, and discarded. No
+`01_FRAMES` folder is written.
+
+Frames are a *cache*, not a record. The Stage A record is the detections, the
+tracks and the scalars. Any frame can be reproduced exactly from three things:
+
+| input | where |
+|---|---|
+| the raw video | the capture tree (`$JERBOA_RAW_ROOT`) |
+| the code | `meta.provenance.gitCommit`, `matlabVersion` |
+| the parameters | `meta.provenance.filterType`, `detectParams`, `detectPass`, `windowStart`, `windowEnd` |
+
+`meta.provenance` is stamped on every trial:
+
+```
+frameSource    stream | png-cache | png-export | detections-cache
+keepFrames     none | all
+filterType     the filter applied before detection (apply_filter)
+detectParams   the detection parameters actually used
+detectPass     pass1 | pass2-backup  (which pass produced these detections)
+windowStart/End the exported window, absolute video frames
+matlabVersion  version()
+gitCommit      short sha, '-dirty' if the tree had uncommitted changes
+processedOn    timestamp
+```
+
+A `-dirty` commit means the sha does not pin what ran; treat those results as
+unversioned.
+
+**Detections are unchanged by streaming.** The old path wrote a filtered PNG
+and read it back; PNG is lossless and `apply_filter` returns uint8 RGB, so
+detecting on the in-memory filtered frame is bit-identical. Both paths call the
+same `src/detect_circles_frame.m` per frame, so they cannot drift apart.
+
+**Where frames still exist.** Stage B re-exports a small subset around the
+impact (`opts.saveEventFrames`, default `[20 20]` frames either side) into the
+usual `01_FRAMES` mirror with the usual raw-indexed naming, so visual QA has
+something to read without decoding the clip again. `make_video` self-exports to
+`tempdir`, and `diag_impact_frame` falls back to the raw video when no PNG is
+present.
+
+---
+
 ## Frame indices are window-relative
 
 `scripts/process_trial.m` → `auto_window` / `apply_auto_window`;
 `src/process_one_trial.m` step 2.
 
-Stage A exports a **window** of the video, not necessarily all of it. With
+Stage A processes a **window** of the video, not necessarily all of it. With
 `opts.autoWindow` (default true) the window is the red-marker span padded by
 `opts.windowPad` (default `[200 500]`), found by a pre-scan that flags frames
 where `any(R > 150 & G < 100, 'all')`. With `autoWindow` off, the window is the
 whole video.
 
-Every index downstream — the `detect_circles_per_frame` output, `firstValidFrame`,
+Every index downstream — the detection output, `firstValidFrame`,
 and therefore `impact_index` and `stopFrame` — is **relative to that window**.
 The window's absolute start is recorded as `meta.windowStart` (alongside
 `windowEnd` and `autoWindow`) and in both scalars CSVs, so any stored index can
@@ -56,14 +104,15 @@ be resolved back to the video:
 absolute video frame = windowStart + firstValidFrame + trackingIndex − 2
 ```
 
-For a full-range export `windowStart` is 1 and this reduces to
+For a full-range window `windowStart` is 1 and this reduces to
 `firstValidFrame + trackingIndex − 1`.
 
 This offset matters only where an index is mapped **back to the raw video** —
 `src/save_tracks.m` (the `origF` column), `scripts/make_video.m`, and
 `scripts/diag_impact_frame.m`. Everything that stays inside the exported set
-(`make_annotated_frames`, `make_track_qa`) indexes the PNG list on both sides
-and needs no offset.
+(`make_annotated_frames`, `make_track_qa`) indexes the window on both sides and
+needs no offset — `make_annotated_frames` maps window index to video frame
+internally when it reads from the video rather than from a PNG cache.
 
 **No timing quantity depends on it.** `kd_kinematics` builds `t = (0:nF-1)*dt`
 over the tracked array and re-zeroes it at impact, so `t_s`, `v0`, `t_stop`,

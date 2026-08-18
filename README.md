@@ -20,17 +20,54 @@ Analysis                  depth_scaling
 
 **Stage A — tracking.** `process_trial` walks the video tree, resolves each
 clip's metadata, and hands one video at a time to `process_one_trial`, which
-exports frames, detects circles, picks the first frame carrying exactly N
-markers, tracks from there, and writes `*_tracks.mat` plus QA overlays. Stage A
+streams frames from the video, detects circles, picks the first frame carrying
+exactly N markers, tracks from there, and writes `*_tracks.mat` plus QA
+overlays. Stage A
 deliberately contains **no** kinematics — no smoothing, no velocity, no event
 detection — so that a smoothing or model problem can never cost a full batch.
 
+**Frames are not kept (`keepFrames`, default `'none'`).** Stage A decodes each
+frame from the video, filters it, detects on it in memory, and discards it. No
+`01_FRAMES` folder is written.
+
+```matlab
+process_trial('batch', root, outRoot, struct('keepFrames','all'))   % write PNGs as before
+```
+
+Exported frames were only ever a disposable cache — `make_video` self-exports to
+`tempdir`, `diag_impact_frame` falls back to the raw clip, and Stage B
+re-exports the few frames around the impact for QA. The Stage A *record* is the
+detections, tracks and scalars, which are unchanged.
+
+The detections are unchanged too, not merely equivalent: the old path wrote a
+filtered PNG and read it straight back, and PNG is lossless, so detecting on the
+in-memory filtered frame is bit-identical. Both paths call the same
+`src/detect_circles_frame.m`.
+
+**Disk implications.** A 12 s clip at ~2.8 kfps is ~34k frames; the autoWindow
+subset was already only ~10% of that, and now even those PNGs are gone. What
+remains per trial is the detections `.mat`, the tracks, the scalars, and (from
+Stage B) a few dozen event-frame PNGs. `01_FRAMES` stops growing entirely
+unless you ask for it. Existing `01_FRAMES` folders are still read, but only
+under `reuse`/`resume`; `retry` and `overwrite` re-derive from the raw video.
+
+Because the frames are gone, every trial is stamped with `meta.provenance` —
+filter, detection parameters, which pass produced them, MATLAB version and the
+pipeline git commit — so any frame can be regenerated from raw video + code +
+parameters. See [docs/QUANTITIES.md](docs/QUANTITIES.md).
+
+**Raw video location.** The tools that need the raw clip (`diag_impact_frame`,
+`make_video`, Stage B's event-frame export) resolve it through
+`src/find_raw_video.m`, rooted at `$JERBOA_RAW_ROOT` if set, else
+`D:\ME_GRANULAB\Test Batches`. The search is recursive, so the variable need
+only name an ancestor of the clips.
+
 **`autoWindow` (on by default).** Campaign-2 clips run ~12 s (~40k frames)
-around a ~2k-frame event, so exporting and detecting every frame spends nearly
-all of its time on empty bed. Before exporting, `process_trial` pre-scans the
-video once with `VideoReader` — no PNGs written, no `imfindcircles` — flagging
-frames that contain any red pixel at all (`any(R > 150 & G < 100, 'all')`, the
-same crude mask `diag_raw_clip` uses). It then exports only
+around a ~2k-frame event, so detecting every frame spends nearly all of its time
+on empty bed. Before processing, `process_trial` pre-scans the video once with
+`VideoReader` — no `imfindcircles` — flagging frames that contain any red pixel
+at all (`any(R > 150 & G < 100, 'all')`, the same crude mask `diag_raw_clip`
+uses). Only this range is then decoded and detected:
 
 ```
 [firstRed − pad(1),  lastRed + pad(2)]      clamped to [1, nFrames]
@@ -49,15 +86,15 @@ warned — a clip is never silently narrowed away. The same fallback applies if
 the pre-scan throws.
 
 ```matlab
-process_trial('batch', root, outRoot, struct('autoWindow', false))          % export everything
+process_trial('batch', root, outRoot, struct('autoWindow', false))          % whole video
 process_trial('batch', root, outRoot, struct('windowPad', [400 800]))       % wider margins
 ```
 
-`autoWindow` narrows the **export/detect range only**. It never affects which
+`autoWindow` narrows the **detection range only**. It never affects which
 trials are selected, and it is independent of `dryRun` and `policy`.
 
 **Frame indices are window-relative.** `firstValidFrame` and every tracking
-index are relative to the exported window, not the video. The window's absolute
+index are relative to the processed window, not the video. The window's absolute
 start is recorded as `meta.windowStart` (with `windowEnd` and `autoWindow`) and
 in both scalars CSVs, so any index resolves back:
 
@@ -65,10 +102,11 @@ in both scalars CSVs, so any index resolves back:
 absolute video frame = windowStart + firstValidFrame + trackingIndex − 2
 ```
 
-For a full-range export `windowStart` is 1 and this reduces to the familiar
-`firstValidFrame + index − 1`. Reused frames take their window from the PNG
-filenames on disk — `export_frames` names each file by its absolute index — so
-reusing frames exported under a different window cannot shift the offset.
+For a full-range window `windowStart` is 1 and this reduces to the familiar
+`firstValidFrame + index − 1`. When a `01_FRAMES` cache *is* reused, its window
+is taken from the PNG filenames on disk — `export_frames` names each file by its
+absolute index — so a cache written under a different window cannot shift the
+offset.
 
 Stage B needs no offset: `kd_kinematics` re-zeroes time at impact and works
 entirely inside the tracked array.
@@ -77,6 +115,12 @@ entirely inside the tracked array.
 locates impact and stop and produces depth, velocity and the stopping
 acceleration. It follows Katsuragi & Durian (2007): velocity-first, with
 `a_stop` read from the fitted acceleration discontinuity.
+
+It also writes the per-trial QA that Stage A no longer leaves behind:
+`opts.saveEventFrames` (default true) re-exports `[impact − 20, stop + 20]`
+frames from the raw clip into the usual `01_FRAMES` mirror with the usual
+raw-indexed naming, and `opts.impactCheck` renders the impact-QA PNG. Both are
+skipped under `dryRun`/`preview`, are idempotent, and never fail a trial.
 
 **Audit.** `audit_all_trials` is the review gate. It builds the per-trial table,
 applies the automatic rules, and supports click-selection for manual exclusions:
