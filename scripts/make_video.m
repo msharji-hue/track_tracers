@@ -120,7 +120,7 @@ fprintf('fps_true = %.0f (source: %s)\n', fps_true, fpsSrc);
 % opened CHIN/as_poured/125mm_T04.avi when asked for 25mm_T04_dense.
 % Shared with diag_impact_frame and track_tracers_2's event-frame export, so
 % the exact-stem rule lives in exactly one place.
-videoPath = find_raw_video(opt.RawRoot, meta);
+videoPath = find_raw_video(opt.RawRoot, meta, local_meta_model(meta));
 fprintf('video: %s\n', videoPath);
 
 v        = open_video(videoPath);
@@ -234,4 +234,12 @@ function r = local_default_raw_root()
 %   this searches recursively, so it need only be an ANCESTOR of the clips.
     r = getenv('JERBOA_RAW_ROOT');
     if isempty(r), r = 'D:\ME_GRANULAB\Test Batches'; end
+end
+
+function m = local_meta_model(meta)
+%LOCAL_META_MODEL  The trial's foot model, '' when it carries none.
+%   Required by find_raw_video: the same filename stem exists under every model
+%   folder, so without it the lookup can open another model's clip.
+    m = '';
+    if isstruct(meta) && isfield(meta,'model'), m = meta.model; end
 end
