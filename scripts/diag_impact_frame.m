@@ -34,6 +34,12 @@ function R = diag_impact_frame(trialTag, varargin)
 %       'Pad'       frames either side of [impact, stop] in panel B (default 20)
 %       'Save'      write a PNG to <Root>/03_RESULTS/_batch_logs/impact_checks
 %                   (default false)
+%       'Show'      display the figure (default true). Set false for
+%                   unattended batch QA: the figure is built invisibly, written
+%                   to the PNG, and closed, so a long batch does not accumulate
+%                   hundreds of open windows. Show=false requires Save=true --
+%                   otherwise the work would be discarded with nothing to see
+%                   and nothing on disk, which is never what was meant.
 %
 %   FRAME SOURCE. Exported frames are a disposable intermediate and are often
 %   purged. This looks for the PNG first, under 01_FRAMES (honouring
@@ -51,6 +57,7 @@ opt.RawRoot = 'D:\ME_GRANULAB\Test Batches';
 opt.Model   = '';
 opt.Pad     = 20;
 opt.Save    = false;
+opt.Show    = true;
 for i = 1:2:numel(varargin), opt.(varargin{i}) = varargin{i+1}; end
 
 trialTag = char(trialTag);
@@ -60,6 +67,12 @@ fprintf('  Root    : %s\n', opt.Root);
 fprintf('  RawRoot : %s\n', opt.RawRoot);
 fprintf('  Pad     : %d frames\n', opt.Pad);
 fprintf('  Save    : %s\n', local_tern(opt.Save,'yes','no (display only)'));
+fprintf('  Show    : %s\n', local_tern(opt.Show,'yes','no (headless QA)'));
+if ~opt.Show && ~opt.Save
+    error('diag_impact_frame:nothingToDo', ...
+        ['Show=false requires Save=true. With neither, the figure would be ' ...
+         'rendered and discarded: nothing displayed and nothing written.']);
+end
 
 % ── 1) Locate and load ───────────────────────────────────────────────────
 T = dir(fullfile(opt.Root,'03_RESULTS','**',[trialTag '_tracks.mat']));
@@ -152,7 +165,11 @@ mx = tracks.trackedX(:,impact);
 my = tracks.trackedY(:,impact);
 
 % ── 4) Figure ────────────────────────────────────────────────────────────
-fig = figure('Color','w','Position',[60 60 1280 560]);
+if opt.Show
+    fig = figure('Color','w','Position',[60 60 1280 560]);
+else
+    fig = figure('Color','w','Position',[60 60 1280 560],'Visible','off');
+end
 tl  = tiledlayout(fig,1,2,'Padding','compact','TileSpacing','compact');
 title(tl, sprintf('%s  --  impact frame check', strrep(trialTag,'_','\_')), ...
       'FontWeight','bold');
@@ -230,6 +247,11 @@ if opt.Save
     outPath = fullfile(outDir, [trialTag '_impact_check.png']);
     exportgraphics(fig, outPath, 'Resolution', 150);
     fprintf('  wrote %s\n', outPath);
+end
+
+if ~opt.Show
+    close(fig);
+    fig = gobjects(1);      % nothing to hand back; the PNG is the output
 end
 
 fprintf('\n');

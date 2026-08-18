@@ -260,6 +260,77 @@ averaged together.
 
 ---
 
+## Workspace hygiene
+
+Four guards against the failure mode where the tree on disk stops matching what
+the analysis thinks it is loading.
+
+**Batch labels are normalized.** A bare number becomes `Batch <n>`. The label is
+a directory level, so `5` and `Batch 5` would build two sibling trees for the
+same batch and split its trials across both — invisible until an analysis
+silently loads half the data. The rewrite is printed when it fires; anything
+that is not purely digits is left exactly as typed. Applied to the struct/
+headless path and to all three dialogs (batch, single, rerun).
+
+**Duplicate `trialTag`s are a hard error.** `load_kinematics_set` refuses to
+build a table where one trial contributes two rows — usually a stale
+`_kin_scalars.csv` left under an old batch or model folder. It lists every
+duplicated tag with the full path of each source file:
+
+```
+2 trialTag(s) appear more than once. One trial must produce exactly one row.
+
+  165mm_T03_full_default  (2 copies)
+      ...\03_RESULTS\GB\5\Default Model\...\165mm_T03_full_default_kin_scalars.csv
+      ...\03_RESULTS\GB\Batch 5\Default Model\...\165mm_T03_full_default_kin_scalars.csv
+```
+
+It stops rather than filtering because a duplicate double-weights that trial in
+every per-height mean and every fit, and nothing in the results reveals that it
+happened. Which copy is current is a decision for you, not the loader.
+
+**Every committed trial gets an impact-QA image.** Stage B runs
+`diag_impact_frame` after each `_kin.mat` is written (`opts.impactCheck`,
+default true), producing one PNG per trial in
+
+```
+<Root>\03_RESULTS\_batch_logs\impact_checks\
+```
+
+so a whole batch can be checked by eye afterwards. The call is wrapped: a QA
+failure logs one `WARN` line and never fails a trial whose kinematics are
+already on disk. Skipped under `dryRun` and `preview`. Set
+`struct('impactCheck', false)` to turn it off.
+
+`diag_impact_frame` itself takes `'Show'` (default true); `'Show',false`
+requires `'Save',true` and renders invisibly, which is what the batch path uses.
+
+**Archiving finished work.** `scripts/archive_workspace.m` moves processed
+`GB\<batch>\<model>` subtrees out of the workspace and zips them.
+
+```matlab
+archive_workspace                      % dry run: prints the full plan
+archive_workspace('Confirm', true)     % actually move, zip, verify, delete
+```
+
+Dry run is the default and prints every source folder, its file count and size
+in GB, the destination, and the zip that would be written. It touches only
+`01_FRAMES`, `02_SAVED_DETECTIONS` and `03_RESULTS`; raw videos and existing
+`_ARCHIVE` contents are never read for anything but collision checks.
+
+Order matters. Before anything moves, every **Default** `*_kin_scalars.csv` is
+copied flat into `_ARCHIVE\reference_default_scalars\` and left
+**uncompressed** — that is the baseline for the old-vs-new `impactDistPx`
+(−360) comparison, so it has to stay readable without unzipping. Subtrees then
+move to `_ARCHIVE\<MODEL>\<BATCH>\<frames|detections|results>\`, one zip is
+written per `<MODEL>\<BATCH>`, and the uncompressed copy is deleted **only
+after** the zip's entry count is read back and matches the number of files
+moved. On any mismatch both copies are kept and a warning is raised — a zip
+that cannot be shown to be complete never becomes the only copy. Each run
+appends to `_ARCHIVE\ARCHIVE_MANIFEST.txt`.
+
+---
+
 ## Rules
 
 - **Do not rename** raw videos, `*_tracks.mat`, folders, or trialTags.

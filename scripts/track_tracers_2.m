@@ -35,6 +35,11 @@ function P = track_tracers_2(mode, target, opts)
 %                .massG   carriage+foot mass in grams (default 65) for f in N
 %                .model   model-level subfolder under 03_RESULTS to search,
 %                         e.g. 'Default model'  ['' = search all models]
+%                .impactCheck true (default) -> after each trial is committed,
+%                         write an impact-QA PNG via diag_impact_frame into
+%                         03_RESULTS/_batch_logs/impact_checks. Skipped under
+%                         dryRun and preview. A QA failure logs a WARN line and
+%                         never fails the trial.
 %
 %   OUTPUTS (per trial, sibling of the tracks/ folder — stays in the SAME tree)
 %     <...>/<container>/kinematics/<trialTag>_kin.mat          meta + kin + calib
@@ -57,6 +62,11 @@ function P = track_tracers_2(mode, target, opts)
     end
     opts.massG   = getfld(opts,'massG',65);
     opts.model   = getfld(opts,'model','');   % e.g. 'Default model'; '' = search all
+    % Per-trial impact QA. Writes one PNG per committed trial via
+    % diag_impact_frame so a batch can be checked by eye afterwards. Never runs
+    % under dryRun or preview (nothing is committed in either), and a QA failure
+    % never fails the trial -- the kinematics are already on disk by then.
+    opts.impactCheck = getfld(opts,'impactCheck',true);
     mode = lower(strtrim(mode));
 
     thisDir = fileparts(mfilename('fullpath'));
@@ -142,7 +152,7 @@ function P = track_tracers_2(mode, target, opts)
         'v0_cm_s,d_final_cm,t_stop_s,a_stop_cm_s2,reason,kinPath\n']);
     L = batch_log_init(logDir, stamp, {'kin_log_','kin_progress_','kin_retry_'}, header, csvHeader);
 
-    nOK = 0; nSkip = 0; nFail = 0; total = numel(items);
+    nOK = 0; nSkip = 0; nFail = 0; nQA = 0; nQAfail = 0; total = numel(items);
     for i = 1:total
         it = items(i);
         fprintf('[%3d/%3d] %s ...\n', i, total, it.trialTag);
@@ -240,6 +250,26 @@ function P = track_tracers_2(mode, target, opts)
             if ~exist(it.kinDir,'dir'), mkdir(it.kinDir); end
             save(it.kinMat, 'meta', 'kin', 'calib', '-v7.3');
             write_kin_scalars(it, meta, kin, calib, opts.massG);
+
+            % ── per-trial impact QA ──────────────────────────────────────
+            % Strictly after the _kin.mat exists: diag_impact_frame reads it
+            % back off disk. Wrapped so a QA problem -- a purged frame, a
+            % missing raw clip, a display fault -- can never cost a trial whose
+            % kinematics are already committed.
+            if opts.impactCheck
+                try
+                    diag_impact_frame(it.trialTag, 'Root', root, ...
+                                      'Save', true, 'Show', false);
+                    nQA = nQA + 1;
+                catch ME_QA
+                    nQAfail = nQAfail + 1;
+                    warnLine = sprintf(['  WARN impact QA skipped for %s: %s\n' ...
+                                        '       (kinematics were written; QA only)\n'], ...
+                                       it.trialTag, ME_QA.message);
+                    fprintf('%s', warnLine);
+                    batch_log_row(L, warnLine, '');
+                end
+            end
         end
 
         if ~strcmp(opts.figures,'none')
@@ -262,6 +292,14 @@ function P = track_tracers_2(mode, target, opts)
     batch_log_finalize(L, fin);
     fprintf('\nKinematics batch done: OK=%d  SKIPPED=%d  FAILED=%d\nLog: %s\n', ...
         nOK, nSkip, nFail, L.txt);
+
+    if opts.impactCheck && ~opts.preview
+        % diag_impact_frame writes under <root>/03_RESULTS/_batch_logs, with no
+        % model level, so this is deliberately built from root and not from
+        % resultsRoot (which carries the model subfolder when opts.model is set).
+        fprintf('Impact QA: %d written, %d skipped\n  %s\n', nQA, nQAfail, ...
+                fullfile(root,'03_RESULTS','_batch_logs','impact_checks'));
+    end
 
     if opts.preview && ~isempty(PREVIEW)
         P = struct2table(PREVIEW);

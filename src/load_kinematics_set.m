@@ -112,6 +112,36 @@ K = table(tag, mdl, cond, hLab, fps, impF, stopF, ...
         'fps','impactFrame','stopFrame', ...
         'v0_cm_s','d_final_cm','t_stop_s','a_stop_cm_s2','phi', ...
         'impactDistPx','bedX','kinPath'});
+
+% ── duplicate trialTags are a hard error ─────────────────────────────────
+% One trial must contribute exactly one row. A tag appearing twice means two
+% _kin_scalars.csv files describe the same trial -- typically a stale copy left
+% under an old batch or model folder after a re-run or a rename. Silently
+% keeping both double-weights that trial in every per-height mean and every
+% fit, so this stops rather than warns: the caller cannot tell from the results
+% that it happened, and the fix is a deliberate deletion, not a filter.
+[uTags, ~, uIdx] = unique(K.trialTag);
+counts = accumarray(uIdx, 1);
+dupTags = uTags(counts > 1);
+if ~isempty(dupTags)
+    msg = sprintf(['%d trialTag(s) appear more than once. One trial must ' ...
+                   'produce exactly one row.\n\n'], numel(dupTags));
+    for i = 1:numel(dupTags)
+        rows = find(K.trialTag == dupTags(i));
+        msg  = [msg sprintf('  %s  (%d copies)\n', dupTags(i), numel(rows))]; %#ok<AGROW>
+        for r = rows(:).'
+            % kinPath was derived from the scalars CSV; invert that to name the
+            % file the user actually has to delete.
+            csvPath = strrep(K.kinPath(r), '_kin.mat', '_kin_scalars.csv');
+            msg = [msg sprintf('      %s\n', csvPath)]; %#ok<AGROW>
+        end
+    end
+    msg = [msg sprintf(['\nDelete the stale copies (keep exactly one per trial) ' ...
+                        'and re-run.\nDo not filter them out here: which copy is ' ...
+                        'current is a decision only you can make.\n'])];
+    error('load_kinematics_set:duplicateTrialTag', '%s', msg);
+end
+
 K.isZeroDrop = K.dropHeight_mm == 0;
 
 % Zero-drop protocol: a d0 trial is released FROM CONTACT, so the impact speed
