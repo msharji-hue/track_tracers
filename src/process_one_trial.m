@@ -1,8 +1,15 @@
 function status = process_one_trial(cfg)
 % PROCESS_ONE_TRIAL  Tracking-only pipeline for ONE video.
 %
-%   export frames -> detect circles -> find first frame with exactly N markers
+%   stream frames -> detect circles -> find first frame with exactly N markers
 %   -> redefine that as tracking frame 1 -> track_markers -> save + QA.
+%
+%   FRAMES ARE NOT KEPT BY DEFAULT. Frames are decoded, filtered, detected on,
+%   and discarded (cfg.keepFrames = 'none'). Exported PNGs were only ever a
+%   disposable cache: the detections, tracks and scalars are the Stage A
+%   record, and the frames are reproducible from raw video + code + the
+%   parameters recorded in meta.provenance. Set cfg.keepFrames = 'all' to write
+%   01_FRAMES as before.
 %
 %   Deliberately contains NO kinematics: no Savitzky-Golay smoothing, no
 %   velocity/acceleration, no (a+g), no force-law fitting, no rod rotation, and
@@ -17,7 +24,8 @@ function status = process_one_trial(cfg)
 %
 %   cfg fields: videoPath, framesDir, detDir, resultsDir, meta, params, calib,
 %   nExpectedMarkers(8), interactive, makeQA, reuseFrames, reuseDetections,
-%   filterType('sharpen').
+%   filterType('sharpen'), keepFrames('none'|'all'), windowStart, windowEnd,
+%   passLabel (recorded in provenance), codeDir (for the git commit).
 
     if ~isfield(cfg,'nExpectedMarkers'), cfg.nExpectedMarkers = 8;        end
     if ~isfield(cfg,'filterType'),       cfg.filterType       = 'sharpen';end
@@ -49,30 +57,42 @@ function status = process_one_trial(cfg)
     status.fps = fps;
     m.fps_true = fps;
 
-    % ── 2) EXPORT FRAMES ──────────────────────────────────────────────────
-    %   The exported set is a WINDOW of the video, not necessarily the whole of
-    %   it (see opts.autoWindow in process_trial). Every index downstream --
-    %   detections, firstValidFrame, tracking frame 1 -- is relative to this
+    % ── 2) FRAME SOURCE + WINDOW ──────────────────────────────────────────
+    %   Stage A detects from a WINDOW of the video, not necessarily all of it
+    %   (see opts.autoWindow in process_trial). Every index downstream --
+    %   detections, firstValidFrame, tracking frame 1 -- is relative to that
     %   window, so its absolute start is recorded on the meta as windowStart.
     %   Absolute video frame = windowStart + firstValidFrame + k - 2 for
-    %   tracking frame k.
+    %   tracking frame k. That arithmetic is IDENTICAL whether the frames came
+    %   from PNGs or from the stream.
+    %
+    %   Three ways to get frames, in priority order:
+    %     png-cache   an existing 01_FRAMES folder, under reuse semantics only
+    %     png-export  keepFrames='all': write PNGs, then detect from them
+    %     stream      default: decode, filter, detect, discard. No PNGs.
+    keepFrames = 'none';
+    if isfield(cfg,'keepFrames') && ~isempty(cfg.keepFrames)
+        keepFrames = lower(char(cfg.keepFrames));
+    end
     haveFrames = isfolder(cfg.framesDir) && ...
                  ~isempty(dir(fullfile(cfg.framesDir, '*.png')));
+    nAvail = floor(v.Duration * v.FrameRate);
+
     if cfg.reuseFrames && haveFrames
+        % Reuse semantics only. retry/overwrite deliberately do not land here:
+        % they re-derive from the raw video.
+        frameSource = 'png-cache';
         fprintf('Reusing existing frames: %s\n', cfg.framesDir);
-        % Take the window from the filenames ON DISK, not from cfg: reused
-        % frames may have been exported under a different window, and trusting
+        % Take the window from the filenames ON DISK, not from cfg: cached
+        % frames may have been written under a different window, and trusting
         % cfg here would silently shift every absolute frame index.
         [startFrame, endFrame] = local_window_from_frames(cfg.framesDir);
         if isnan(startFrame)
             startFrame = 1;
-            endFrame   = floor(v.Duration * v.FrameRate);
+            endFrame   = nAvail;
         end
         fprintf('  reused window: frames %d-%d\n', startFrame, endFrame);
     else
-        fprintf('Exporting frames...\n');
-        if ~exist(cfg.framesDir, 'dir'), mkdir(cfg.framesDir); end
-        nAvail = floor(v.Duration * v.FrameRate);
         if cfg.interactive
             startFrame = pick_start_frame(v);
             endFrame   = pick_end_frame(v, startFrame);
@@ -84,9 +104,16 @@ function status = process_one_trial(cfg)
             startFrame = 1;
             endFrame   = nAvail;
         end
-        export_frames(v, startFrame, endFrame, cfg.framesDir, cfg.filterType);
-        fps_true = fps; %#ok<NASGU>
-        save(fullfile(cfg.framesDir, 'video_meta.mat'), 'fps_true');
+        if strcmp(keepFrames,'all')
+            frameSource = 'png-export';
+            fprintf('Exporting frames (keepFrames=''all'')...\n');
+            if ~exist(cfg.framesDir, 'dir'), mkdir(cfg.framesDir); end
+            export_frames(v, startFrame, endFrame, cfg.framesDir, cfg.filterType);
+            fps_true = fps; %#ok<NASGU>
+            save(fullfile(cfg.framesDir, 'video_meta.mat'), 'fps_true');
+        else
+            frameSource = 'stream';
+        end
     end
     m.windowStart = startFrame;
     m.windowEnd   = endFrame;
@@ -102,12 +129,18 @@ function status = process_one_trial(cfg)
         detectOut   = S.det.detect;
         centersCell = detectOut.centersCell;
         nDetected   = detectOut.nDetected;
+        frameSource = 'detections-cache';
     else
         fprintf('Detecting circles...\n');
         params = cfg.params;
         params.heightLabel = m.heightLabel;
         if ~cfg.interactive, params.showPreviewEveryN = 0; end
-        detectOut = detect_circles_per_frame(cfg.framesDir, params);
+        if strcmp(frameSource,'stream')
+            detectOut = detect_circles_stream(v, startFrame, endFrame, ...
+                                              cfg.filterType, params);
+        else
+            detectOut = detect_circles_per_frame(cfg.framesDir, params);
+        end
 
         if ~exist(cfg.detDir, 'dir'), mkdir(cfg.detDir); end
         saveInfo = struct( ...
@@ -121,6 +154,23 @@ function status = process_one_trial(cfg)
         centersCell = detectOut.centersCell;
         nDetected   = detectOut.nDetected;
     end
+
+    % ── PROVENANCE ────────────────────────────────────────────────────────
+    %   With keepFrames='none' the frames are gone, so the detections are
+    %   reproducible only from raw video + code + these parameters. Record
+    %   enough to redo them exactly.
+    m.provenance = struct( ...
+        'frameSource',   frameSource, ...
+        'keepFrames',    keepFrames, ...
+        'filterType',    cfg.filterType, ...
+        'detectParams',  cfg.params, ...
+        'detectPass',    local_get(cfg,'passLabel','pass1'), ...
+        'windowStart',   startFrame, ...
+        'windowEnd',     endFrame, ...
+        'matlabVersion', version, ...
+        'gitCommit',     pipeline_commit(local_get(cfg,'codeDir','')), ...
+        'processedOn',   datestr(now, 'yyyy-mm-dd HH:MM:SS'));
+
     status.nFrames = numel(centersCell);
 
     % ── 4) FIRST FRAME WITH EXACTLY N MARKERS ─────────────────────────────
@@ -165,8 +215,20 @@ function status = process_one_trial(cfg)
         try
             make_track_qa(m, tracks, nDetected, cfg.resultsDir);
             annotDir = fullfile(cfg.resultsDir, 'qa', [m.trialTag '_annotated']);
-            make_annotated_frames(cfg.framesDir, detectOut, trackedX, trackedY, ...
-                                  firstValidFrame, cfg.calib, annotDir, 'maxFrames', 300);
+            % When nothing was exported there is no framesDir to read; the
+            % overlay renderer re-reads just the frames it needs straight from
+            % the video, using windowStart to map window index -> video frame.
+            if strcmp(frameSource,'stream')
+                make_annotated_frames('', detectOut, trackedX, trackedY, ...
+                                      firstValidFrame, cfg.calib, annotDir, ...
+                                      'maxFrames', 300, ...
+                                      'Video', cfg.videoPath, ...
+                                      'WindowStart', startFrame, ...
+                                      'Filter', cfg.filterType);
+            else
+                make_annotated_frames(cfg.framesDir, detectOut, trackedX, trackedY, ...
+                                      firstValidFrame, cfg.calib, annotDir, 'maxFrames', 300);
+            end
         catch MEq
             status.partial = true;
             status.reason  = ['QA failed: ' MEq.message];
@@ -224,6 +286,10 @@ end
 
 function s = fmt(x, f)
     if isnan(x), s = 'NaN'; else, s = sprintf(f, x); end
+end
+
+function v = local_get(s, f, dflt)
+    if isstruct(s) && isfield(s,f) && ~isempty(s.(f)), v = s.(f); else, v = dflt; end
 end
 
 function [lo, hi] = local_window_from_frames(framesDir)

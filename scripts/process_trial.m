@@ -21,16 +21,29 @@ function process_trial(mode, inputTarget, outputRoot, opts)
 %     .dryRun        list videos + metadata + planned paths, process nothing
 %     .limit         process only first N videos (0 = all)  [test batch]
 %     .batchLabel    inserted into output path; '' = omit the batch level
+%     .keepFrames    'none' (default) | 'all'
+%                      none : stream frames from the video, detect in memory,
+%                             write NO PNGs. 01_FRAMES is not created.
+%                      all  : export 01_FRAMES first and detect from it, as the
+%                             pipeline did before streaming existed.
+%                    Frames are a disposable cache either way: the detections,
+%                    tracks and scalars are the Stage A record, and the frames
+%                    are reproducible from raw video + code + meta.provenance.
 %     .policy        'reuse'(default) | 'resume' | 'retry' | 'overwrite'
-%                      reuse     : reuse frames+detections if present, redo tracks
-%                      resume    : additionally SKIP trials already having tracks
+%                      reuse     : reuse cached detections if present, redo
+%                                  tracks. This is the ONLY policy that will
+%                                  read an existing 01_FRAMES cache (legacy
+%                                  folders, or one written by keepFrames='all').
+%                      resume    : as reuse, and additionally SKIP trials that
+%                                  already have tracks
 %                      retry     : skip trials that already have tracks, and for
-%                                  those that do NOT, re-detect from the frames
-%                                  instead of reloading the cached detections.
-%                                  Use this to retry FAILED trials: 'resume'
-%                                  reloads the very detections that failed and
-%                                  so reproduces the failure exactly.
-%                      overwrite : re-export, re-detect, re-track everything
+%                                  those that do NOT, re-derive frames from the
+%                                  raw video and re-detect rather than reloading
+%                                  the cached detections. Use this to retry
+%                                  FAILED trials: 'resume' reloads the very
+%                                  detections that failed and so reproduces the
+%                                  failure exactly.
+%                      overwrite : re-derive, re-detect, re-track everything
 %     .videoListFile a .txt of full video paths to process (e.g. a retry list)
 %     .detectParams  struct of detection-parameter overrides for the FIRST pass
 %     .backupParams  struct of detection parameters for a SECOND pass, tried
@@ -129,6 +142,7 @@ function run_single(CFG, opts)
     cfg = base_cfg(CFG, m, fullfile(inDir, file), framesDir, detDir, resultsDir);
     cfg.interactive = false;
     cfg.makeQA      = isfield(opts,'makeQA') && isequal(opts.makeQA, true);
+    cfg.keepFrames = opts.keepFrames;
     cfg = apply_auto_window(cfg, opts, m.trialTag);
     fprintf('Processing single trial: %s\n', m.trialTag);
 
@@ -212,7 +226,12 @@ function run_batch(CFG, inputRoot, opts)
         fprintf('autoWindow: ON  (pad %d before / %d after the red-marker span)\n', ...
                 opts.windowPad(1), opts.windowPad(2));
     else
-        fprintf('autoWindow: OFF (exporting every frame)\n');
+        fprintf('autoWindow: OFF (whole video)\n');
+    end
+    if strcmp(opts.keepFrames,'all')
+        fprintf('keepFrames: all  (01_FRAMES will be written)\n');
+    else
+        fprintf('keepFrames: none (streaming; no PNGs written)\n');
     end
     fprintf('Processing %d videos  (policy=%s, batch="%s", model="%s")\n\n', ...
             total, opts.policy, opts.batchLabel, opts.model);
@@ -246,14 +265,20 @@ function run_batch(CFG, inputRoot, opts)
         cfg = base_cfg(CFG, m, it.fullpath, framesDir, detDir, resultsDir);
         cfg.interactive = false; cfg.makeQA = true;
         cfg = apply_auto_window(cfg, opts, it.name);
+        cfg.keepFrames = opts.keepFrames;
         switch opts.policy
             case 'overwrite'
                 cfg.reuseFrames = false; cfg.reuseDetections = false;
             case 'retry'
-                % Frames are fine; the DETECTIONS are what failed. Reusing them
-                % would reproduce the failure exactly, so force a fresh pass.
-                cfg.reuseFrames = true;  cfg.reuseDetections = false;
+                % The DETECTIONS are what failed, so they must be redone;
+                % reusing them would reproduce the failure exactly. Frames are
+                % re-derived from the raw video rather than reused, because
+                % under the streaming default there is no PNG cache to reuse
+                % and re-streaming is equivalent.
+                cfg.reuseFrames = false; cfg.reuseDetections = false;
             otherwise
+                % reuse / resume: a 01_FRAMES cache, if one exists, is preferred
+                % here and only here.
                 cfg.reuseFrames = true;  cfg.reuseDetections = true;
         end
 
@@ -268,7 +293,10 @@ function run_batch(CFG, inputRoot, opts)
                       && contains(lower(st.reason), 'detected markers')
                 fprintf('  Pass 1 found no valid frame. Retrying with backup parameters:\n');
                 cfg2 = cfg;
-                cfg2.reuseFrames = true; cfg2.reuseDetections = false;
+                % Frames are not reused across passes under streaming; the
+                % second pass re-derives them with the backup parameters.
+                cfg2.reuseFrames = false; cfg2.reuseDetections = false;
+                cfg2.passLabel   = 'pass2-backup';
                 bf = fieldnames(opts.backupParams);
                 for bi = 1:numel(bf)
                     cfg2.params.(bf{bi}) = opts.backupParams.(bf{bi});
@@ -352,9 +380,12 @@ function run_rerun(CFG, target, opts)
 
     cfg = base_cfg(CFG, m, target, framesDir, detDir, resultsDir);
     cfg.interactive = true; cfg.makeQA = true;
+    cfg.keepFrames  = opts.keepFrames;
     switch stage
+        % Stage 2 no longer reuses frames: under streaming there is no PNG
+        % cache to reuse, and re-deriving from the raw video is equivalent.
         case 1, cfg.reuseFrames = true;  cfg.reuseDetections = true;
-        case 2, cfg.reuseFrames = true;  cfg.reuseDetections = false;
+        case 2, cfg.reuseFrames = false; cfg.reuseDetections = false;
         case 3, cfg.reuseFrames = false; cfg.reuseDetections = false;
     end
 
@@ -409,6 +440,16 @@ function opts = normalize_opts(opts)
     end
     if ~isfield(opts,'windowPad') || isempty(opts.windowPad)
         opts.windowPad = [200 500];
+    end
+    % keepFrames: 'none' (default) streams frames and writes no PNGs; 'all'
+    % exports 01_FRAMES as the pipeline used to.
+    if ~isfield(opts,'keepFrames') || isempty(opts.keepFrames)
+        opts.keepFrames = 'none';
+    end
+    opts.keepFrames = lower(strtrim(char(opts.keepFrames)));
+    if ~ismember(opts.keepFrames, {'none','all'})
+        error('process_trial:badKeepFrames', ...
+              'keepFrames must be ''none'' or ''all'', got "%s".', opts.keepFrames);
     end
     opts.windowPad = double(opts.windowPad(:).');
     if numel(opts.windowPad) == 1, opts.windowPad = opts.windowPad([1 1]); end
@@ -578,6 +619,8 @@ function cfg = base_cfg(CFG, m, videoPath, framesDir, detDir, resultsDir)
     cfg.makeQA           = false;
     cfg.reuseFrames      = false;
     cfg.reuseDetections  = false;
+    cfg.keepFrames       = 'none';
+    cfg.codeDir          = CFG.codeDir;   % for the provenance git commit
 end
 
 function [framesDir, detDir, resultsDir] = build_leaf_dirs(outputRoot, m)
