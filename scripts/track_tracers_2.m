@@ -35,6 +35,16 @@ function P = track_tracers_2(mode, target, opts)
 %                .massG   carriage+foot mass in grams (default 65) for f in N
 %                .model   model-level subfolder under 03_RESULTS to search,
 %                         e.g. 'Default model'  ['' = search all models]
+%                .saveEventFrames true (default) -> after each trial is
+%                         committed, re-export the frames around the impact
+%                         ([impact-pad, stop+pad]) from the raw video into the
+%                         trial's 01_FRAMES mirror, raw-indexed, so the impact
+%                         QA and diag_impact_frame have PNGs to read. Stage A
+%                         streams and keeps none. Skipped under dryRun/preview,
+%                         idempotent, and never fails a trial.
+%                .eventFramePad  [pre post] frames, default [20 20]
+%                .rawRoot  capture tree for the re-export
+%                         (default $JERBOA_RAW_ROOT, else the campaign-1 tree)
 %                .impactCheck true (default) -> after each trial is committed,
 %                         write an impact-QA PNG via diag_impact_frame into
 %                         03_RESULTS/_batch_logs/impact_checks. Skipped under
@@ -67,6 +77,18 @@ function P = track_tracers_2(mode, target, opts)
     % under dryRun or preview (nothing is committed in either), and a QA failure
     % never fails the trial -- the kinematics are already on disk by then.
     opts.impactCheck = getfld(opts,'impactCheck',true);
+    % Event-frame subset. Stage A no longer keeps 01_FRAMES, so the frames
+    % around the impact are re-exported here -- a few dozen per trial rather
+    % than the whole clip -- into the standard 01_FRAMES mirror, using the raw
+    % frame_%05d.png naming so diag_impact_frame's PNG-first lookup finds them
+    % with no change. Skipped under dryRun and preview.
+    opts.saveEventFrames = getfld(opts,'saveEventFrames',true);
+    opts.eventFramePad   = getfld(opts,'eventFramePad',[20 20]);
+    opts.eventFramePad   = double(opts.eventFramePad(:).');
+    if numel(opts.eventFramePad) == 1
+        opts.eventFramePad = opts.eventFramePad([1 1]);
+    end
+    opts.rawRoot = getfld(opts,'rawRoot', local_default_raw_root());
     mode = lower(strtrim(mode));
 
     thisDir = fileparts(mfilename('fullpath'));
@@ -152,7 +174,7 @@ function P = track_tracers_2(mode, target, opts)
         'v0_cm_s,d_final_cm,t_stop_s,a_stop_cm_s2,reason,kinPath\n']);
     L = batch_log_init(logDir, stamp, {'kin_log_','kin_progress_','kin_retry_'}, header, csvHeader);
 
-    nOK = 0; nSkip = 0; nFail = 0; nQA = 0; nQAfail = 0; total = numel(items);
+    nOK = 0; nSkip = 0; nFail = 0; nQA = 0; nQAfail = 0; nEF = 0; nEFfail = 0; total = numel(items);
     for i = 1:total
         it = items(i);
         fprintf('[%3d/%3d] %s ...\n', i, total, it.trialTag);
@@ -248,6 +270,26 @@ function P = track_tracers_2(mode, target, opts)
                 't_stop_s',getfld(kin,'t_stop_s',NaN)); %#ok<AGROW>
         else
             if ~exist(it.kinDir,'dir'), mkdir(it.kinDir); end
+
+            % ── event-frame subset ───────────────────────────────────────
+            % Before the scalars are written, so eventFrameRange can be
+            % recorded in both the .mat and the CSV. Same windowStart +
+            % firstValidFrame arithmetic diag_impact_frame uses.
+            meta.eventFrameRange = [NaN NaN];
+            if opts.saveEventFrames
+                try
+                    meta.eventFrameRange = export_event_frames(it, meta, kin, opts);
+                    nEF = nEF + 1;
+                catch ME_EF
+                    nEFfail = nEFfail + 1;
+                    warnLine = sprintf(['  WARN event frames skipped for %s: %s\n' ...
+                                        '       (kinematics were written; frames only)\n'], ...
+                                       it.trialTag, ME_EF.message);
+                    fprintf('%s', warnLine);
+                    batch_log_row(L, warnLine, '');
+                end
+            end
+
             save(it.kinMat, 'meta', 'kin', 'calib', '-v7.3');
             write_kin_scalars(it, meta, kin, calib, opts.massG);
 
@@ -293,6 +335,9 @@ function P = track_tracers_2(mode, target, opts)
     fprintf('\nKinematics batch done: OK=%d  SKIPPED=%d  FAILED=%d\nLog: %s\n', ...
         nOK, nSkip, nFail, L.txt);
 
+    if opts.saveEventFrames && ~opts.preview
+        fprintf('Event frames: %d trial(s) exported, %d skipped\n', nEF, nEFfail);
+    end
     if opts.impactCheck && ~opts.preview
         % diag_impact_frame writes under <root>/03_RESULTS/_batch_logs, with no
         % model level, so this is deliberately built from root and not from
@@ -378,10 +423,11 @@ function write_kin_scalars(it, meta, kin, calib, massG) %#ok<INUSD>
         'trialNum,condition,phi,fps,', ...
         'impact_frame,stop_frame,v0_cm_s,d_final_cm,a_stop_cm_s2,t_stop_s,', ...
         'impactDistPx,bedX,windowStart,windowEnd,autoWindow,', ...
+        'eventFrameFirst,eventFrameLast,', ...
         'rodAngle_peak_abs_deg,rodAngle_peak_signed_deg,rodAngle_net_deg,', ...
         'rodAngle_range_deg,rodAngle_noise_sd_deg,rodAngle_refFrame\n']);
     fprintf(fid, ['%s,%s,%g,%g,%s,%.4f,%.4f,%d,%d,%.4f,%.4f,%.2f,%.6f,%g,%g,', ...
-        '%g,%g,%d,', ...
+        '%g,%g,%d,%g,%g,', ...
         '%.4f,%.4f,%.4f,%.4f,%.4f,%g\n'], ...
         getfld(meta,'material',''), getfld(meta,'batchName',''), ...
         getfld(meta,'dropHeight_mm',NaN), getfld(meta,'trialNum',NaN), it.condition, ...
@@ -390,6 +436,7 @@ function write_kin_scalars(it, meta, kin, calib, massG) %#ok<INUSD>
         getfld(calib,'impactDistPx',NaN), getfld(calib,'bedX',NaN), ...
         getfld(meta,'windowStart',NaN), getfld(meta,'windowEnd',NaN), ...
         double(isequal(getfld(meta,'autoWindow',false), true)), ...
+        local_ef(meta,1), local_ef(meta,2), ...
         getfld(ra,'peak_abs_deg',NaN), getfld(ra,'peak_signed_deg',NaN), ...
         getfld(ra,'net_deg',NaN), getfld(ra,'range_deg',NaN), ...
         getfld(ra,'noise_sd_deg',NaN), getfld(ra,'refFrame',NaN));
@@ -436,4 +483,100 @@ function f = fig_triptych(kin, meta)
     subplot(3,1,3); plot(t, kin.a_plus_g, '-'); grid on;
     ylabel('a+g (cm/s^2)'); xlabel('t (s)'); yline(0,':');
     xline(0,'--'); xline(kin.t_stop_s,'--r');
+end
+function rng = export_event_frames(it, meta, kin, opts)
+%EXPORT_EVENT_FRAMES  Re-export the frames around the impact for ONE trial.
+%
+%   Stage A streams and keeps no PNGs, so the handful of frames actually needed
+%   for visual QA are written here instead of the whole clip. They go to the
+%   trial's standard 01_FRAMES mirror with the SAME raw-indexed frame_%05d.png
+%   naming export_frames uses, so diag_impact_frame's PNG-first lookup finds
+%   them with no change at all.
+%
+%   Range, using exactly the arithmetic diag_impact_frame uses:
+%       tracking index k  ->  raw frame  windowStart + firstValidFrame + k - 2
+%   so
+%       [rawImpact - padPre, rawStop + padPost]   clamped to the video.
+%
+%   Idempotent: if every PNG in the range is already present the export is
+%   skipped and the range still returned, so re-running a batch is cheap.
+
+    wStart = 1;
+    if isfield(meta,'windowStart') && isfinite(meta.windowStart)
+        wStart = meta.windowStart;
+    end
+    base      = wStart + meta.firstValidFrame - 1;   % raw frame of tracking index 1
+    rawImpact = base + kin.impact_index - 1;
+    rawStop   = base + kin.stopFrame    - 1;
+
+    lo = rawImpact - opts.eventFramePad(1);
+    hi = rawStop   + opts.eventFramePad(2);
+
+    % Frames mirror the results path under 01_FRAMES, honouring the scratch
+    % root exactly as process_trial's build_leaf_dirs does.
+    resultDir = fileparts(fileparts(it.kinMat));     % <resultsDir>/kinematics -> <resultsDir>
+    if ~contains(resultDir, '03_RESULTS')
+        error('export_event_frames:noResultsRoot', ...
+              'Cannot derive the 01_FRAMES mirror from %s', resultDir);
+    end
+    framesRoot = getenv('JERBOA_FRAMES_ROOT');
+    if isempty(framesRoot)
+        framesDir = strrep(resultDir, '03_RESULTS', '01_FRAMES');
+    else
+        rel       = extractAfter(string(resultDir), "03_RESULTS");
+        framesDir = char(fullfile(framesRoot, '01_FRAMES', strip(rel, filesep)));
+    end
+
+    videoPath = find_raw_video(opts.rawRoot, meta);
+    v         = open_video(videoPath);
+    nAvail    = floor(v.Duration * v.FrameRate);
+    lo        = max(1, round(lo));
+    hi        = min(nAvail, round(hi));
+    if hi < lo
+        error('export_event_frames:emptyRange', ...
+              'Event range [%d, %d] is empty (video has %d frames).', lo, hi, nAvail);
+    end
+
+    % Already there? Then nothing to do.
+    if isfolder(framesDir)
+        present = true;
+        for f = lo:hi
+            if ~isfile(fullfile(framesDir, sprintf('frame_%05d.png', f)))
+                present = false; break
+            end
+        end
+        if present
+            fprintf('  event frames already present (%d-%d)\n', lo, hi);
+            rng = [lo hi];
+            return
+        end
+    end
+
+    % Same filter Stage A used, so these PNGs match what it detected on.
+    filt = 'sharpen';
+    if isfield(meta,'provenance') && isfield(meta.provenance,'filterType') ...
+            && ~isempty(meta.provenance.filterType)
+        filt = meta.provenance.filterType;
+    end
+
+    if ~isfolder(framesDir), mkdir(framesDir); end
+    export_frames(v, lo, hi, framesDir, filt);
+    fprintf('  event frames %d-%d -> %s\n', lo, hi, framesDir);
+    rng = [lo hi];
+end
+
+function v = local_ef(meta, k)
+%LOCAL_EF  Element k of meta.eventFrameRange, or NaN when frames were not saved.
+    v = NaN;
+    if isfield(meta,'eventFrameRange') && numel(meta.eventFrameRange) >= k
+        v = meta.eventFrameRange(k);
+    end
+end
+
+function r = local_default_raw_root()
+%LOCAL_DEFAULT_RAW_ROOT  Where the raw capture tree lives.
+%   Set JERBOA_RAW_ROOT to point the toolchain at the current campaign without
+%   editing code; the fallback is the campaign-1 tree.
+    r = getenv('JERBOA_RAW_ROOT');
+    if isempty(r), r = 'D:\ME_GRANULAB\Test Batches'; end
 end

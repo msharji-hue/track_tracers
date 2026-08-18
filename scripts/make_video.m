@@ -15,7 +15,8 @@ function make_video(trialTag, style, root, varargin)
 %   get_calibration(). The renderers themselves are unchanged.
 %
 %   OPTIONS (name-value)
-%       'RawRoot'    raw video root (default D:\ME_GRANULAB\Test Batches)
+%       'RawRoot'    raw video root. Defaults to $JERBOA_RAW_ROOT if set, else
+%                    D:\ME_GRANULAB\Test Batches. Searched recursively.
 %       'PadBefore'  frames before impact (default 40)
 %       'PadAfter'   frames after stop    (default 60)
 %       'Save'       write an mp4 (default false = preview only)
@@ -42,7 +43,7 @@ function make_video(trialTag, style, root, varargin)
 if nargin < 2 || isempty(style), style = 'tracer'; end
 if nargin < 3 || isempty(root),  root  = 'D:\ME_GRANULAB\JerboaImpact'; end
 
-opt.RawRoot    = 'D:\ME_GRANULAB\Test Batches';
+opt.RawRoot    = local_default_raw_root();
 opt.PadBefore  = 40;
 opt.PadAfter   = 60;
 opt.Save       = false;
@@ -254,4 +255,13 @@ end
 if ~opt.Save
     fprintf('Preview only. Re-run with ''Save'',true to write the mp4.\n');
 end
+end
+
+function r = local_default_raw_root()
+%LOCAL_DEFAULT_RAW_ROOT  Where the raw capture tree lives.
+%   Set JERBOA_RAW_ROOT to point the toolchain at the current campaign without
+%   editing code; the fallback is the campaign-1 tree. The lookup that uses
+%   this searches recursively, so it need only be an ANCESTOR of the clips.
+    r = getenv('JERBOA_RAW_ROOT');
+    if isempty(r), r = 'D:\ME_GRANULAB\Test Batches'; end
 end

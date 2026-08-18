@@ -27,7 +27,11 @@ function R = diag_impact_frame(trialTag, varargin)
 %
 %   OPTIONS (name-value)
 %       'Root'      results root   (default D:\ME_GRANULAB\JerboaImpact)
-%       'RawRoot'   raw video root (default D:\ME_GRANULAB\Test Batches)
+%       'RawRoot'   raw video root. Defaults to $JERBOA_RAW_ROOT if set, else
+%                   D:\ME_GRANULAB\Test Batches. Searched RECURSIVELY, so it
+%                   only has to be an ancestor of the clips, not the exact
+%                   batch folder. Set the environment variable once to point
+%                   the whole toolchain at the current campaign.
 %       'Model'     ''|'Default'|'Tight'|'Wide'. Only used when the tracks file
 %                   carries no saved calib; otherwise the SAVED calib wins, so
 %                   what is drawn is what the trial was actually processed with.
@@ -53,7 +57,7 @@ function R = diag_impact_frame(trialTag, varargin)
 %   so a caller can batch this without re-deriving any of it.
 
 opt.Root    = 'D:\ME_GRANULAB\JerboaImpact';
-opt.RawRoot = 'D:\ME_GRANULAB\Test Batches';
+opt.RawRoot = local_default_raw_root();
 opt.Model   = '';
 opt.Pad     = 20;
 opt.Save    = false;
@@ -345,3 +349,12 @@ if isstruct(s) && isfield(s,f) && ~isempty(s.(f)), v = s.(f); else, v = dflt; en
 end
 
 function s = local_tern(c,a,b), if c, s=a; else, s=b; end, end
+
+function r = local_default_raw_root()
+%LOCAL_DEFAULT_RAW_ROOT  Where the raw capture tree lives.
+%   Set JERBOA_RAW_ROOT to point the toolchain at the current campaign without
+%   editing code; the fallback is the campaign-1 tree. The lookup that uses
+%   this searches recursively, so it need only be an ANCESTOR of the clips.
+    r = getenv('JERBOA_RAW_ROOT');
+    if isempty(r), r = 'D:\ME_GRANULAB\Test Batches'; end
+end
