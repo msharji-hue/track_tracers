@@ -232,6 +232,20 @@ grows from `wMin` to `wMax` until the slope standard error meets
 Windows are clamped to `[impact_index, stopFrame]` so no fit straddles the stop
 discontinuity.
 
+**Saved field names differ from the internal ones.** `v_smooth` and `z_rod` are
+local variables inside `kd_kinematics`; they are *not* struct fields. What
+reaches disk is:
+
+| internal | saved as |
+|---|---|
+| `v_smooth` | `kin.v` |
+| `depthRod_cm` | `kin.depthRod_cm`, aliased `kin.z` |
+| `a` | `kin.a` |
+| `a_plus_g` | `kin.a_plus_g` |
+
+Reading `kin.v_smooth` or `kin.z_smooth` gets you nothing — that was a real bug
+in `make_annotated_video`. Consumers want `kin.v` and `kin.z`.
+
 ```matlab
 v0_cm_s = v_smooth(impact_index);
 ```

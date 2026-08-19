@@ -91,8 +91,12 @@ function make_annotated_video(framesDir, det, kin, params, saveVideo)
     plotStart   = max(1, impactIdx - preFrames);
     plotEnd     = min(kin.stopFrame, nKin);
     tKin_ms     = ((1:nKin) - impactIdx) ./ fps_true .* 1000;
-    vAll        = kin.v_smooth;
-    zAll        = kin.z_smooth;
+    % kd_kinematics saves the smoothed velocity as kin.v and the depth as
+    % kin.z (an alias for kin.depthRod_cm). v_smooth/z_smooth are internal
+    % variable names inside kd_kinematics and were never struct fields, so
+    % reading them here returned nothing.
+    vAll        = kin.v;
+    zAll        = kin.z;
     t_sl        = tKin_ms(plotStart:plotEnd);
     z_sl        = zAll(plotStart:plotEnd);
     v_sl        = vAll(plotStart:plotEnd);
