@@ -11,13 +11,26 @@ function K = load_kinematics_set(root, varargin)
 %   'series' is true). Returns one row per trial with, at minimum:
 %     trialTag, model, condition, dropHeight_mm, fps, impactFrame, stopFrame,
 %     v0_cm_s, d_final_cm, a_stop_cm_s2, impactDistPx, bedX
+%   plus the *_meas companions described under ZERO-DROP QUARANTINE below.
 %
-%   ZERO-DROP v0. The protocol defines v0 = 0 at h = 0: a d0 trial is released
-%   from contact, so there is no fall and no impact speed. v0_cm_s is therefore
-%   set to exactly 0 on those rows. The value kd_kinematics measured is kept as
-%   v0_meas_cm_s for QA -- it is the velocity peak of a release transient, and a
-%   large one flags a trial that was dropped rather than released. Never fit
-%   against v0_meas_cm_s; use it only to check the zero-drop trials.
+%   ZERO-DROP QUARANTINE. A d0 trial is released FROM CONTACT: no fall, no
+%   impact, no deceleration. kd_kinematics is a dynamic-impact pipeline and is
+%   correct for its domain; h = 0 is outside it. Everything it derives from the
+%   impact/stop event is therefore UNDEFINED on those rows, not merely noisy:
+%
+%     v0_cm_s        set to 0        (protocol: no fall, so no impact speed)
+%     d_final_cm     set to NaN
+%     t_stop_s       set to NaN
+%     a_stop_cm_s2   set to NaN
+%
+%   The raw numbers are preserved for QA in v0_meas_cm_s, d_final_meas_cm,
+%   t_stop_meas_s and a_stop_meas_cm_s2. A large v0_meas_cm_s flags a trial
+%   that was dropped rather than released. NEVER fit against the *_meas
+%   columns; they are diagnostics, not measurements.
+%
+%   BACKLOG: d0 needs a dedicated quasi-static extraction -- the settled
+%   penetration under the foot's own weight, with no impact event. Until that
+%   exists, zero-drop rows carry no usable depth.
 %
 %   dropHeight_mm is the physical drop height and is the column every height
 %   axis should use. trialTag is an identifier only.
@@ -45,7 +58,9 @@ function K = load_kinematics_set(root, varargin)
 %
 %   ZERO-DROP TRIALS (h = 0) are returned with isZeroDrop true and are exempt
 %   from the automatic rules, which assume a fall and a deceleration that a
-%   released-from-rest trial does not have. Manual exclusions still apply.
+%   released-from-rest trial does not have. Manual exclusions still apply. The
+%   NaN-depth rule in particular must stay exempt, or the quarantine above
+%   would delete the very rows it is meant to preserve.
 %
 %   The returned table always carries the diagnostic columns keep and reason,
 %   so an exclusion can be traced rather than silently applied. Rows failing a
@@ -144,13 +159,36 @@ end
 
 K.isZeroDrop = K.dropHeight_mm == 0;
 
-% Zero-drop protocol: a d0 trial is released FROM CONTACT, so the impact speed
-% is defined to be zero. What kd_kinematics reports for those trials is the
-% velocity peak of a release transient, not a fall, so it is a QA number rather
-% than a physical impact speed. Keep the measured value under v0_meas_cm_s and
-% set the physical column to the protocol value.
-K.v0_meas_cm_s = K.v0_cm_s;
-K.v0_cm_s(K.isZeroDrop) = 0;
+% ── zero-drop quarantine ─────────────────────────────────────────────────
+% A d0 trial is released FROM CONTACT: there is no fall, no impact, and no
+% deceleration transient. kd_kinematics is a DYNAMIC-IMPACT pipeline and is
+% correct for its domain -- h = 0 is simply outside it. Everything it derives
+% from the impact/stop event is therefore undefined here, not merely noisy:
+%
+%   v0_cm_s       the velocity peak of a release transient, not an impact speed
+%   d_final_cm    depth at a "stop" located by a zero-crossing that never
+%                 belonged to a deceleration
+%   t_stop_s      extrapolated from that same non-event
+%   a_stop_cm_s2  the slope of a fit to it
+%
+% All four are set to their protocol value (v0 = 0) or to NaN, and the raw
+% numbers are preserved in *_meas companion columns for QA. A large
+% v0_meas_cm_s, for instance, flags a trial that was dropped rather than
+% released.
+%
+% BACKLOG: d0 needs a dedicated quasi-static extraction -- the settled
+% penetration under the foot's own weight, measured without an impact event.
+% Until that exists these rows carry no usable depth, and nothing downstream
+% should treat the quarantined values as measurements.
+K.v0_meas_cm_s      = K.v0_cm_s;
+K.d_final_meas_cm   = K.d_final_cm;
+K.t_stop_meas_s     = K.t_stop_s;
+K.a_stop_meas_cm_s2 = K.a_stop_cm_s2;
+
+K.v0_cm_s(K.isZeroDrop)       = 0;      % protocol: no fall, so no impact speed
+K.d_final_cm(K.isZeroDrop)    = NaN;    % undefined until quasi-static d0 exists
+K.t_stop_s(K.isZeroDrop)      = NaN;
+K.a_stop_cm_s2(K.isZeroDrop)  = NaN;
 
 % ── phi: take the CURRENT value, not the one baked into the CSV ──────────
 % _kin_scalars.csv carries meta.phi as it stood at TRACKING time, which for
@@ -255,13 +293,18 @@ if opt.verbose
         fprintf('    %-16s %3d\n', cs(c), sum(K.condition==cs(c)));
     end
     if ~isempty(D0)
-        fprintf('\n  MEASURED d0 (h = 0, released from contact):\n');
+        % Reads the preserved column: d_final_cm is NaN on these rows by
+        % quarantine, so the raw numbers live in d_final_meas_cm.
+        fprintf('\n  QUARANTINED d0 (h = 0, released from contact):\n');
         fprintf('    %.3f +/- %.3f cm   (n = %d, range %.3f - %.3f)\n', ...
-            mean(D0.d_final_cm), std(D0.d_final_cm), height(D0), ...
-            min(D0.d_final_cm), max(D0.d_final_cm));
-        fprintf(['    Ambroso et al. (2005) d+ measured directly rather than\n' ...
-                 '    inverted from the drop trials -- compare against the fitted\n' ...
-                 '    d0 that depth_scaling(...,''form'',''ambroso'') reports.\n']);
+            mean(D0.d_final_meas_cm), std(D0.d_final_meas_cm), height(D0), ...
+            min(D0.d_final_meas_cm), max(D0.d_final_meas_cm));
+        fprintf(['    NOT A MEASUREMENT: zero-drop kinematics come from the\n' ...
+                 '    dynamic-impact pipeline, which has no impact to work from\n' ...
+                 '    at h = 0. Quarantined pending a dedicated quasi-static d0\n' ...
+                 '    extraction (backlog). d_final_cm, t_stop_s and a_stop_cm_s2\n' ...
+                 '    are NaN on these rows; the raw values are in the *_meas\n' ...
+                 '    columns for QA only.\n']);
     end
     fprintf('\n');
 end

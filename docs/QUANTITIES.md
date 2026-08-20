@@ -250,17 +250,8 @@ in `make_annotated_video`. Consumers want `kin.v` and `kin.z`.
 v0_cm_s = v_smooth(impact_index);
 ```
 
-**`v0 = 0` for zero-drop trials, by protocol.** `src/load_kinematics_set.m` sets
-
-```matlab
-K.v0_meas_cm_s          = K.v0_cm_s;
-K.v0_cm_s(K.isZeroDrop) = 0;
-```
-
-A `d0` trial is released *from contact*: there is no fall and no impact speed.
-What `kd_kinematics` reports for those trials is the velocity peak of a release
-transient, so it is kept as `v0_meas_cm_s` for QA — a large value flags a trial
-that was dropped rather than released — and never fitted against.
+**Zero-drop trials are quarantined.** See the section below; `v0_cm_s` is 0 by
+protocol on those rows and the raw value is kept as `v0_meas_cm_s` for QA.
 
 A free-fall cross-check `v0_ff = sqrt(2*g*h_cm)` and the ratio
 `v0_ratio = v0_cm_s / v0_ff` are computed in `scripts/depth_scaling.m`. The ratio
@@ -294,6 +285,45 @@ depth. Noted in `src/get_calibration.m`.
 (`'postCapMs'`, default from `calib.postCapMs`).
 
 `a_plus_g = -a - g` is the net resistive acceleration in the project convention.
+
+---
+
+## Zero-drop trials are quarantined
+
+`src/load_kinematics_set.m`, immediately after `isZeroDrop` is set.
+
+A `d0` trial is released **from contact**: no fall, no impact, no deceleration.
+`kd_kinematics` is a *dynamic-impact* pipeline and is correct for its domain —
+h = 0 is simply outside it. Everything it derives from the impact/stop event is
+therefore **undefined** on those rows, not merely noisy:
+
+| column | zero-drop value | why |
+|---|---|---|
+| `v0_cm_s` | `0` | protocol: no fall, so no impact speed |
+| `d_final_cm` | `NaN` | depth at a "stop" located by a zero-crossing that never belonged to a deceleration |
+| `t_stop_s` | `NaN` | extrapolated from that same non-event |
+| `a_stop_cm_s2` | `NaN` | the slope of a fit to it |
+
+The raw numbers are preserved in `*_meas` companion columns —
+`v0_meas_cm_s`, `d_final_meas_cm`, `t_stop_meas_s`, `a_stop_meas_cm_s2` — for
+**QA only**. A large `v0_meas_cm_s` flags a trial that was dropped rather than
+released. Never fit against them; they are diagnostics, not measurements.
+
+`kd_kinematics` is deliberately **not** changed. Its machinery is right for
+impacts; the fix is to stop asking it about a case it does not model.
+
+**Backlog.** `d0` needs a dedicated quasi-static extraction: the settled
+penetration under the foot's own weight, measured with no impact event. Until
+that exists these rows carry no usable depth, and the fitted `d0` from the
+`ambroso` form has no independent measurement to be checked against.
+
+**Nothing downstream can fit them.** `scripts/depth_scaling.m` excludes them
+three times over — the `isZeroDrop` test, `v0 > 0`, and `isfinite(d_final_cm)` —
+and then *asserts* `~any(K.isZeroDrop)`. The redundancy is the point: if a
+future edit relaxes any one condition, the assert fails loudly rather than
+quietly fitting a released-from-contact trial as though it were a drop. The
+loader's NaN-depth exclusion rule stays exempt for zero-drop rows, or the
+quarantine would delete the very rows it is meant to preserve.
 
 ---
 
@@ -375,10 +405,11 @@ fitted from `d` and `v0` rather than the h = 0 depth itself. The two agree
 closely when penetration is small next to the fall. Reported as `d0_cm`
 (`ambroso` form) and `F1_d0_cm` (`literature` form).
 
-**Measured zero-drop depth** — `src/load_kinematics_set.m`, verbose report:
-`mean(D0.d_final_cm)` over `isZeroDrop` trials. This is Ambroso's `d+` measured
-directly rather than inverted from the drop trials. **Compare the two**; they are
-independent estimates of the same length.
+**Measured zero-drop depth** — *not currently available.* This would be
+Ambroso's `d+` measured directly rather than inverted from the drop trials, and
+the natural independent check on the fitted `d0`. The zero-drop trials are
+quarantined (see below), so there is nothing to compare against until the
+quasi-static extraction exists.
 
 A third, unrelated `d0` appears in the `velocity` and `literature` forms as the
 **intercept** of `d = a·v0^(2/3) + d0` and `d = d0 + α·v0` respectively. The

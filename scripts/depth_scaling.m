@@ -93,12 +93,25 @@ fprintf('\n=== depth_scaling (form: %s) ===\n', form);
 K = load_kinematics_set(root, 'model', opt.model, 'condition', opt.condition, ...
                               'exclude', opt.exclude, 'depthCut', opt.DepthCut);
 
-% Fits need a real fall and a real penetration; zero-drop trials are kept by
-% the loader for the measured-d0 report but cannot enter a v0 fit. Count them
-% before the filter, since nothing downstream can see them afterwards.
+% Fits need a real fall and a real penetration. Zero-drop trials are kept by the
+% loader for QA but are quarantined there -- no impact means no depth, stop or
+% stopping acceleration -- so they cannot enter any fit. Count them before the
+% filter, since nothing downstream can see them afterwards.
 nZeroDrop = sum(K.isZeroDrop);
 K = K(~K.isZeroDrop & isfinite(K.v0_cm_s) & isfinite(K.d_final_cm) & ...
       K.v0_cm_s > 0 & K.d_final_cm > 0, :);
+
+% Zero-drop rows must not reach a fit. Three independent conditions above
+% already exclude them -- the isZeroDrop test, v0 > 0 (set to 0 by protocol),
+% and isfinite(d_final_cm) (quarantined to NaN by load_kinematics_set) -- so
+% this asserts rather than filters. It exists because the redundancy is the
+% point: if a future edit relaxes any one of those, this fails loudly instead
+% of quietly fitting a released-from-contact trial as though it were a drop.
+assert(~any(K.isZeroDrop), 'depth_scaling:zeroDropLeaked', ...
+    ['%d zero-drop trial(s) survived the filter. They carry no impact, so ' ...
+     'their depth and stop are undefined and must never enter a fit.'], ...
+    sum(K.isZeroDrop));
+
 if height(K) < 3
     error('depth_scaling:tooFewTrials','Only %d usable trials.', height(K));
 end
@@ -202,9 +215,11 @@ for mi = 1:numel(models)
     end
 end
 if nZeroDrop > 0
-    fprintf(['  %d zero-drop trial(s) excluded from the fits (v0 = 0 by protocol;\n' ...
-             '    measured values are in v0_meas_cm_s, and load_kinematics_set\n' ...
-             '    reports the measured d0 over them)\n'], nZeroDrop);
+    fprintf(['  %d zero-drop trial(s) excluded from the fits. Their impact-derived\n' ...
+             '    quantities are QUARANTINED by load_kinematics_set (v0 = 0 by\n' ...
+             '    protocol; d_final, t_stop and a_stop NaN), pending a dedicated\n' ...
+             '    quasi-static d0 extraction. Raw values are in the *_meas columns\n' ...
+             '    for QA only -- do not read them as a d0 measurement.\n'], nZeroDrop);
 end
 
 % ── 4) form-specific fit ─────────────────────────────────────────────────
@@ -292,8 +307,13 @@ end
 % penetration at zero drop height, because the +d inside H survives as v0 -> 0.
 % Dropping to pure v0 removes that term, so here d0 is a characteristic length
 % fitted from d and v0 rather than the h = 0 depth itself. The two agree closely
-% when the penetration is small next to the fall. Compare against the MEASURED
-% h = 0 depth that load_kinematics_set reports.
+% when the penetration is small next to the fall.
+%
+% There is currently NO independent h = 0 depth to compare it against: the
+% zero-drop trials are quarantined by load_kinematics_set, because the
+% dynamic-impact pipeline has no impact to work from at h = 0. Restoring that
+% comparison needs the quasi-static d0 extraction on the backlog. Until then the
+% fitted d0 stands alone.
 % ═════════════════════════════════════════════════════════════════════════
 function R = local_fit_ambroso(name, S, M, G)
 d0  = mean(M.d0_mean);
