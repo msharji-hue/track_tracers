@@ -362,49 +362,67 @@ from impact, per foot model.
 
 **Pre-agreed caption language:**
 
-> Curves are pointwise medians over replicate drops, processed identically at
-> every height including h = 0. Zero-drop trials are displayed on the same
-> footing as all other heights; in the Tight geometry, two of ten zero-drop
-> trials exhibited measurable intrusion (0.74 and 0.96 cm) and are shown
-> individually, while the remaining zero-drop trials showed displacement at the
-> imaging-resolution scale (< 0.02 cm). Net acceleration is plotted on a
-> logarithmic axis following Katsuragi & Durian (2007) Fig. 1c, with the dashed
-> line at g. All quantitative fits use unmodified kinematics.
+> Curves are pointwise medians over replicate drops. Zero-drop trials are
+> reserved for scalar measurements and are not shown in the time-history
+> figures. Net acceleration is near zero during free fall (below the plotted
+> range); curves rise from the axis floor to the first resolved post-impact
+> value within the instrument's ~1 ms acceleration resolution. All quantitative
+> fits use unmodified kinematics.
 
 **Display layer.** Every step below affects the drawing only. Nothing is
 written back, and no fit sees any of it:
 
 | step | applies to |
 |---|---|
-| interpolate each replicate onto a uniform grid (`GridMs`, default 0.2 ms) relative to impact, using each trial's OWN `[-PreCapMs, t_stop]` window | all rows, every height including h = 0 |
-| pointwise `Average` across replicates (`'median'` default, or `'mean'`), using only trials with data at that grid point | all rows |
-| terminate where fewer than `MinReplicates` (default 3) trials remain | all rows |
-| `movmean` per row (`SmoothMs`: depth 1.0 ms, v 2.0 ms, a+g 3.0 ms), applied AFTER aggregation, with the pre-smoothing NaN mask re-applied afterwards | each row independently |
-| mask `a + g <= 0` to NaN (log axis) | `a + g` only |
+| resample each replicate onto a uniform grid (`GridMs`, default 0.2 ms) relative to impact | all rows |
+| after each trial's OWN detected `t_stop` (`kin.t_stop_s`, never the quarantined table scalar), fill that trial's remaining grid points with its measured **rest state** — `v = 0`, depth = its `d_final`, `a + g = NaN` | depth, v (not `a + g`: the pipeline computes no post-stop acceleration, and none is invented here) |
+| pointwise `Average` across the **full replicate set** (`'median'` default, or `'mean'`) at every grid point | all rows |
+| curve terminates at the height's **median replicate `t_stop`** — the same endpoint in all three panels | all rows |
+| `movmean` per row (`SmoothMs`: depth 1.0 ms, v 2.0 ms, a+g 1.5 ms), applied AFTER aggregation; NaN-aware and edge-shrinking, so the leading edge at impact is neither shifted nor truncated; the pre-smoothing NaN mask is re-applied afterward | each row independently |
+| mask `a + g <= AccelYMin` to NaN, except the single measured sample immediately before the first above-floor sample, which is **clipped** (not masked) to the floor so the rising connector draws | `a + g` only |
 
-Shorter trials are never padded with their final value. The re-applied NaN mask
-after smoothing is also what stops a curve from drawing a connector down to the
-axis at its start or end: MATLAB breaks a line at NaN.
+**Why rest-extension replaced "terminate below `MinReplicates`".** Replicates
+stop at different times. Under the old rule, past the earliest stop the
+aggregate was taken over only the longest-lasting trials — survivor bias — and
+the curve was pulled toward them before ending early. Filling each trial's rest
+state keeps every replicate in the aggregate for its whole duration; run with
+`'Diagnose', true` for the per-height replicate `t_stop` spread, the support
+count at the curve's endpoint under both rules, and confirmation that display
+smoothing does not shift the `a + g` onset. `MinReplicates` (default 3) now
+gates only whether a height is **plotted at all**, not where a curve ends.
 
-**h = 0 is not special-cased.** The same grid, aggregation, termination and
-windowing (each trial's own `kin.stopFrame`, not the quarantined table scalar)
-apply as for every other height. `load_kinematics_set` quarantines the
-zero-drop **scalars** (`d_final`, `t_stop`, `a_stop` are NaN in the loaded
-table); it does not touch the **traces**, which is what this figure reads
-directly from each `_kin.mat`.
+A consequence to check in the render: `v` decays to ~0 at the endpoint by
+**construction of the median** — about half the replicates are already at rest
+there — not by being forced to zero.
 
-**Individual zero-drop overlays.** A zero-drop trial is drawn as its own thin
-curve (depth and v panels only, the h = 0 colour) whenever its depth range over
-the **whole recorded trace** exceeds `IntrusionThreshCm` (default 0.1 cm) — a
-threshold rule evaluated against every zero-drop trial, not a hardcoded tag
-list. The threshold is checked against the unwindowed trace because it is a
-fact about the trial, independent of the display window.
+**Zero-drop trials are excluded by default** (`'ShowZeroDrop'`, default
+`false`): they are reserved for scalar measurements and are not shown in these
+time-history figures. The individual-intrusion overlay rule (a zero-drop trial
+drawn as its own thin curve, depth/v only, when its depth range over the whole
+recorded trace exceeds `IntrusionThreshCm`) is retained behind the same option
+rather than deleted, and is otherwise unchanged: a threshold rule evaluated
+against the unwindowed trace, not a hardcoded tag list.
 
-**`a + g` (row c) is on a log y-axis**, matching KD 2007 Fig. 1c. Values `<= 0`
-are masked rather than clamped — a log axis cannot show them, and clamping
-would misrepresent rather than omit. h = 0 draws no curve in this row; the
-dashed reference line at `g` is its quasi-static anchor. Depth and v are never
-clamped in this figure (unlike an earlier draft of this script).
+**Pre-impact `a + g` is computed by this figure, display-only**, from each
+trial's measured velocity by the same local line-fit differentiation
+`kd_kinematics` uses (`'PreImpactAccelMs'` window, default 1.0 ms), clamped to
+never straddle the impact discontinuity. `kd_kinematics` deliberately clamps
+its *stored* `a` to `[impact_index, stopFrame]`; this does not alter that value
+is never written to any `_kin.mat`, and never reaches a fit. During free fall it
+sits near zero — below `AccelYMin` — which is what produces the rising edge.
+
+**No synthetic onset point.** Inserting a fixed value (e.g. `1e1`) to force a
+visible rise was considered and rejected. Every plotted sample is measured; the
+sub-resolution part of the rise is represented by the one clipped connector
+point described above, and no fabricated datum appears in the figure.
+
+**`a + g` (row c) is on a log y-axis**, matching KD 2007 Fig. 1c, floored at
+`AccelYMin` (default `1e2` cm/s² — this rig's noise floor; KD used `1e1`). The
+dashed reference line at `g` has been removed. Depth and v are never clamped;
+v's y-axis lower limit is fixed at 0.
+
+**Style.** A dashed vertical line at `t = 0` in every panel; a solid thin line
+at `depth = 0` in the depth panel (the bed surface); no other reference lines.
 
 **Layout.** `'per-model'` (default) writes three figures, one per model, each
 a 3×1 vertical stack sharing the time axis, single-column APS width. `'grid3x3'`
@@ -412,8 +430,13 @@ reproduces the earlier combined rows-×-models figure in one file. Axis limits
 are identical across models within each row in both layouts.
 
 **`Style`** selects the presentation: `'mean'` (default) is the figure above;
-`'trials'` draws every kept trial individually and unaveraged, for QA, sharing
-the same per-row smoothing and drawing code so the two are directly comparable.
+`'trials'` draws every kept trial individually and unaveraged, for QA (no rest
+extension — each trial ends at its own stop), sharing the same drawing code so
+the two are directly comparable.
+
+**Reportable scalars.** `fig1_kinematics_stops.csv` (model, height, median v0,
+median `t_stop`, n) is written alongside the figures for the cross-geometry
+comparison.
 
 ---
 
