@@ -23,6 +23,9 @@ function R = fig_foot_schematic(varargin)
 %       'Save'    write PDF + PNG + CSV     (default true)
 %       'Show'    display the figures       (default true)
 %       'Labels'  add callouts to Figure A  (default false)
+%       'ScaleBar' draw a 10 mm bar on Figure A (default false). The axes are
+%                 on and ticked in mm, so a bar duplicates the scale and can
+%                 disagree with it after a resize. Kept only for slides.
 %
 %   WHAT IS COMPUTED
 %     A_bare   area of the true projected footprint at y <= CutY, onto XZ
@@ -51,7 +54,8 @@ opt.Root   = '';
 opt.OutDir = '';
 opt.Save   = true;
 opt.Show   = true;
-opt.Labels = false;
+opt.Labels   = false;
+opt.ScaleBar = false;   % axes ticks carry the scale; kept for the odd talk slide
 for i = 1:2:numel(varargin), opt.(varargin{i}) = varargin{i+1}; end
 
 if isempty(opt.OutDir)
@@ -87,8 +91,9 @@ name    = strings(n,1);
 stlPath = strings(n,1);
 Abare   = nan(n,1);
 Ahull   = nan(n,1);
-FP      = cell(n,1);      % footprint polyshape
+FP      = cell(n,1);      % footprint polyshape (clipped, XZ)
 HULL    = cell(n,1);      % hull polygon [x z]
+TRI     = cell(n,1);      % full triangulation, reused by Figures A and C
 
 fprintf('\n--- geometry ---\n');
 for i = 1:n
@@ -104,8 +109,12 @@ for i = 1:n
             stlPath(i), opt.CadDir);
     end
 
-    tri  = stlread(char(stlPath(i)));
-    tris = local_clip_below(tri, opt.CutY);
+    % Read once and keep: Figures A and C project the FULL mesh, and reading
+    % the file again there could silently pick up a different revision from the
+    % one validation just ran on.
+    tri    = stlread(char(stlPath(i)));
+    TRI{i} = tri;
+    tris   = local_clip_below(tri, opt.CutY);
     if isempty(tris)
         error('fig_foot_schematic:nothingBelowCut', ...
             ['%s has no geometry at y <= %g. Check CutY against the STL ' ...
@@ -151,13 +160,15 @@ end
 if opt.Save && ~isfolder(opt.OutDir), mkdir(opt.OutDir); end
 
 iDefault = find(name == "Default", 1);
-figA = local_figure_assembly(char(stlPath(iDefault)), opt);
+figA = local_figure_assembly(TRI{iDefault}, opt);
 figB = local_figure_footprints(name, FP, HULL, Abare, Ahull, opt);
+figC = local_figure_topview(name, TRI, HULL, opt);
 
 written = strings(0,1);
 if opt.Save
     written = [written; local_export(figA, opt.OutDir, 'fig_foot_assembly')];
     written = [written; local_export(figB, opt.OutDir, 'fig_foot_footprints')];
+    written = [written; local_export(figC, opt.OutDir, 'fig_foot_topview')];
     csvPath = local_write_csv(opt, name, stlPath, Abare, Ahull);
     written = [written; string(csvPath)];
     fprintf('\n--- written ---\n');
@@ -165,8 +176,8 @@ if opt.Save
 end
 
 if ~opt.Show
-    close(figA); close(figB);
-    figA = gobjects(1); figB = gobjects(1);
+    close(figA); close(figB); close(figC);
+    figA = gobjects(1); figB = gobjects(1); figC = gobjects(1);
 end
 
 fprintf('\n');
@@ -184,6 +195,7 @@ R.hull           = HULL;
 R.written        = written;
 R.figAssembly    = figA;
 R.figFootprints  = figB;
+R.figTopView     = figC;
 end
 
 % ═════════════════════════════════════════════════════════════════════════
@@ -307,84 +319,146 @@ end
 % ═════════════════════════════════════════════════════════════════════════
 %  FIGURE A -- assembly side view
 % ═════════════════════════════════════════════════════════════════════════
-function fig = local_figure_assembly(stlPath, opt)
-%LOCAL_FIGURE_ASSEMBLY  Default model, FULL mesh, projected along Z onto XY.
-%   Silhouette only: the union boundary as a black line over a light grey fill,
-%   with no wireframe. Mesh lines would read as structure that is not there.
+function pg = local_project_union(tri, iAx, jAx)
+%LOCAL_PROJECT_UNION  Silhouette of a FULL mesh projected onto two axes.
+%
+%   Shared by Figure A (project along Z onto XY) and Figure C (project along Y
+%   onto XZ), so the two views are built by the same code and cannot drift into
+%   different renderings of the same part.
+%
+%   iAx/jAx are column indices into tri.Points: 1 = x, 2 = y, 3 = z.
+%   Returns the polyshape union; holes survive as holes.
 
     ws = warning;                     % full current state, restored on exit
     warning('off', 'MATLAB:polyshape:repairedBySimplify');
     warning('off', 'MATLAB:polyshape:boundary3Points');
     restore = onCleanup(@() warning(ws)); %#ok<NASGU>
 
-    tri = stlread(stlPath);
     P = tri.Points;  F = tri.ConnectivityList;
-
     parts = cell(size(F,1),1);
     kept = 0;
     for f = 1:size(F,1)
-        x = P(F(f,:), 1).';
-        y = P(F(f,:), 2).';
-        if polyarea(x, y) < 1e-9, continue; end
+        u = P(F(f,:), iAx).';
+        v = P(F(f,:), jAx).';
+        if polyarea(u, v) < 1e-9, continue; end   % edge-on: no projected area
         kept = kept + 1;
-        parts{kept} = polyshape(x, y, 'Simplify', true);
+        parts{kept} = polyshape(u, v, 'Simplify', true);
+    end
+    if kept == 0
+        error('fig_foot_schematic:emptyProjection', ...
+            'Every triangle projected to zero area on axes %d/%d.', iAx, jAx);
     end
     pg = union([parts{1:kept}]);
+end
 
-    fig = figure('Color','w','Units','inches','Position',[1 1 3.4 5.0], ...
+function local_style_axes(ax, xlab, ylab, ttl, fs)
+%LOCAL_STYLE_AXES  The one axes convention every panel in this file uses.
+%   Engineering orthographic: visible box, equal aspect, mm ticks, labelled
+%   axes. Kept in one place so the figures cannot drift apart stylistically.
+    box(ax, 'on');
+    daspect(ax, [1 1 1]);     % equal aspect that leaves explicit limits alone
+    set(ax, 'FontSize', fs, 'LineWidth', 0.5, 'Layer', 'top', ...
+            'XGrid','off', 'YGrid','off');
+    xlabel(ax, xlab, 'FontSize', fs);
+    ylabel(ax, ylab, 'FontSize', fs);
+    if ~isempty(ttl), title(ax, ttl, 'FontSize', fs+1); end
+end
+
+% ═════════════════════════════════════════════════════════════════════════
+%  FIGURE A -- assembly side view
+% ═════════════════════════════════════════════════════════════════════════
+function fig = local_figure_assembly(tri, opt)
+%LOCAL_FIGURE_ASSEMBLY  Default model, FULL mesh, projected along Z onto XY.
+%   Silhouette only -- the polyshape union filled grey with a thin boundary, no
+%   wireframe. Mesh lines would read as structure that is not there.
+
+    pg = local_project_union(tri, 1, 2);      % x, y
+
+    % Data is roughly 100 x 80 mm, so a ~6 x 5 in canvas holds it at equal
+    % aspect with no dead whitespace.
+    fig = figure('Color','w','Units','inches','Position',[1 1 6.0 5.0], ...
                  'Visible', local_tern(opt.Show,'on','off'));
     ax = axes(fig); hold(ax,'on');
 
     plot(pg, 'Parent', ax, 'FaceColor', [0.85 0.85 0.85], 'FaceAlpha', 1, ...
-             'EdgeColor', 'k', 'LineWidth', 1.0);
+             'EdgeColor', 'k', 'LineWidth', 0.8);
 
-    % Equal aspect FIRST: it changes the limits, and every overlay below is
-    % placed in data coordinates relative to them.
-    axis(ax, 'equal');
-    xl = xlim(ax);  yl = ylim(ax);
-    xr = xl(2) - xl(1);
+    % Limits from the geometry's own bounding box plus a fixed 5 mm margin,
+    % rather than autoscale: reproducible, and no dead whitespace.
+    [bx, by] = boundingbox(pg);
+    MARGIN = 5;
+    xl = [bx(1)-MARGIN, bx(2)+MARGIN];
+    yl = [by(1)-MARGIN, by(2)+MARGIN];
+    xlim(ax, xl);  ylim(ax, yl);
 
-    % Cut plane
+    % ── cut plane ────────────────────────────────────────────────────────
     plot(ax, xl, [opt.CutY opt.CutY], 'k--', 'LineWidth', 1.0);
-    text(ax, xl(2), opt.CutY, ' area cut (beam top)', ...
-         'FontSize', 8, 'VerticalAlignment', 'bottom', ...
-         'HorizontalAlignment', 'right');
-
-    % Drop direction: an arrow along -Y, drawn in data coords so it cannot
-    % drift from the geometry the way a figure-space annotation would.
-    ax0 = xl(1) - 0.10*xr;
-    yTop = yl(2) - 0.05*(yl(2)-yl(1));
-    yBot = yl(1) + 0.20*(yl(2)-yl(1));
-    quiver(ax, ax0, yTop, 0, yBot - yTop, 'Color', 'k', 'LineWidth', 1.2, ...
-           'MaxHeadSize', 0.4, 'AutoScale', 'off');
-    text(ax, ax0, (yTop+yBot)/2, ' drop direction', 'Rotation', 90, ...
-         'FontSize', 8, 'HorizontalAlignment', 'center', ...
+    % Label at the LEFT end, above the line. At y = CutY the part lies to the
+    % right, so the left end is clear of the silhouette.
+    text(ax, xl(1) + 0.02*diff(xl), opt.CutY, ' area cut (beam top)', ...
+         'FontSize', 8, 'HorizontalAlignment', 'left', ...
          'VerticalAlignment', 'bottom');
 
-    % 10 mm scale bar
-    sbX = xl(2) - 0.05*xr - 10;
-    sbY = yl(1) + 0.06*(yl(2)-yl(1));
-    plot(ax, [sbX sbX+10], [sbY sbY], 'k-', 'LineWidth', 2.0);
-    text(ax, sbX+5, sbY, '10 mm', 'FontSize', 8, ...
-         'HorizontalAlignment','center', 'VerticalAlignment','top');
+    % ── drop direction ───────────────────────────────────────────────────
+    % Short arrow inside the axes, pointing -Y. Its column is CHOSEN by testing
+    % candidates against the silhouette, so it lands in genuinely free space
+    % rather than at a coordinate that happened to be clear for one CAD
+    % revision.
+    ARROW_LEN = 15;                                   % mm
+    yTop   = yl(2) - 0.06*diff(yl);
+    xArrow = local_clear_column(pg, xl, yTop, ARROW_LEN);
+    quiver(ax, xArrow, yTop, 0, -ARROW_LEN, 'Color', 'k', 'LineWidth', 1.1, ...
+           'MaxHeadSize', 0.6, 'AutoScale', 'off');
+    text(ax, xArrow + 0.015*diff(xl), yTop - ARROW_LEN/2, 'drop', ...
+         'FontSize', 8, 'HorizontalAlignment', 'left', ...
+         'VerticalAlignment', 'middle');
+
+    % ── optional scale bar ───────────────────────────────────────────────
+    if opt.ScaleBar
+        % Off by default: the axes are ticked in mm, so a bar restates the
+        % scale and can contradict it after a resize.
+        sbX = xl(2) - 0.05*diff(xl) - 10;
+        sbY = yl(1) + 0.06*diff(yl);
+        plot(ax, [sbX sbX+10], [sbY sbY], 'k-', 'LineWidth', 2.0);
+        text(ax, sbX+5, sbY, '10 mm', 'FontSize', 8, ...
+             'HorizontalAlignment','center', 'VerticalAlignment','top');
+    end
 
     if opt.Labels
-        % Positions are derived from the model's own y-extent, not typed in, so
+        % Positions derived from the model's own y-extent, not typed in, so
         % they follow the geometry if the CAD changes.
-        yspan = yl(2) - yl(1);
-        xr2   = xl(2) + 0.02*xr;
+        yspan = diff(yl);
+        xr2   = xl(2) - 0.02*diff(xl);
         lab = { 'mount',   yl(2) - 0.08*yspan ; ...
                 'linkage', yl(2) - 0.30*yspan ; ...
                 'beam',    yl(2) - 0.62*yspan ; ...
                 'toes',    yl(1) + 0.06*yspan };
         for i = 1:size(lab,1)
             text(ax, xr2, lab{i,2}, lab{i,1}, 'FontSize', 8, ...
-                 'HorizontalAlignment','left', 'VerticalAlignment','middle');
+                 'HorizontalAlignment','right', 'VerticalAlignment','middle');
         end
     end
 
-    axis(ax, 'off');
-    title(ax, 'Foot assembly (Default), side view', 'FontSize', 9);
+    local_style_axes(ax, 'x (mm)', 'y (mm)', ...
+                     'Foot assembly (Default), viewed along z', 8);
+end
+
+function xBest = local_clear_column(pg, xl, yTop, arrowLen)
+%LOCAL_CLEAR_COLUMN  An x where a vertical arrow of arrowLen misses the part.
+%
+%   Scans candidate columns from the left and returns the first whose whole
+%   span is outside the silhouette. Falls back to the far left if the part
+%   spans everything, which at worst overlaps rather than erroring: a figure
+%   should still be produced.
+    ys = linspace(yTop - arrowLen, yTop, 12);
+    for f = 0.04 : 0.02 : 0.50
+        x = xl(1) + f*diff(xl);
+        if ~any(isinterior(pg, repmat(x, size(ys)), ys))
+            xBest = x;
+            return
+        end
+    end
+    xBest = xl(1) + 0.04*diff(xl);
 end
 
 % ═════════════════════════════════════════════════════════════════════════
@@ -408,9 +482,9 @@ function fig = local_figure_footprints(name, FP, HULL, Abare, Ahull, opt)
         xs = [xs, min(HULL{i}(:,1)), max(HULL{i}(:,1))]; %#ok<AGROW>
         zs = [zs, min(HULL{i}(:,2)), max(HULL{i}(:,2))]; %#ok<AGROW>
     end
-    pad = 0.05 * max(max(xs)-min(xs), max(zs)-min(zs));
-    XL = [min(xs)-pad, max(xs)+pad];
-    ZL = [min(zs)-pad, max(zs)+pad];
+    MARGIN = 2;                      % mm, fixed: comparable panels, no dead space
+    XL = [min(xs)-MARGIN, max(xs)+MARGIN];
+    ZL = [min(zs)-MARGIN, max(zs)+MARGIN];
 
     for i = 1:n
         ax = nexttile(tl); hold(ax,'on'); box(ax,'on');
@@ -423,11 +497,11 @@ function fig = local_figure_footprints(name, FP, HULL, Abare, Ahull, opt)
         % Convex hull
         plot(ax, HULL{i}(:,1), HULL{i}(:,2), 'r--', 'LineWidth', 1.2);
 
-        axis(ax, 'equal');
+        % Shared limits, set before the style helper. Ticks and labels go on
+        % EVERY panel: each is a standalone orthographic view, and a reader
+        % should not have to look left to find the units.
         xlim(ax, XL); ylim(ax, ZL);
-        set(ax, 'FontSize', 8, 'LineWidth', 0.5, 'Layer', 'top');
-        xlabel(ax, 'x (mm)', 'FontSize', 8);
-        if i == 1, ylabel(ax, 'z (mm)', 'FontSize', 8); end
+        local_style_axes(ax, 'x (mm)', 'z (mm)', '', 8);
 
         % Title carries the COMPUTED values, never typed-in ones.
         title(ax, sprintf('%s: A_{bare} = %.2f, A_{hull} = %.2f cm^2', ...
@@ -437,6 +511,63 @@ function fig = local_figure_footprints(name, FP, HULL, Abare, Ahull, opt)
 
     title(tl, sprintf('Intruding footprint at y = %g mm (grey) and convex hull (red)', ...
                       opt.CutY), 'FontSize', 9);
+end
+
+% ═════════════════════════════════════════════════════════════════════════
+%  FIGURE C -- plan views along the drop axis
+% ═════════════════════════════════════════════════════════════════════════
+function fig = local_figure_topview(name, TRI, HULL, opt)
+%LOCAL_FIGURE_TOPVIEW  Full assembly seen along the drop axis, per model.
+%
+%   The companion to Figure A: A is the full assembly from the side, this is
+%   the full assembly from the direction it travels. FULL mesh, no cut --
+%   Figure B is the cut one.
+%
+%   The intruding footprint's convex hull is overlaid in the SAME red dashed
+%   style Figure B uses, so the reader can see which part of the plan view
+%   actually enters the bed. The hull polygons are the ones already computed
+%   for Figure B and passed in; recomputing them here, even by the same method,
+%   would risk the two figures disagreeing about the same quantity.
+
+    n = numel(name);
+    fig = figure('Color','w','Units','inches','Position',[1 1 7.0 2.8], ...
+                 'Visible', local_tern(opt.Show,'on','off'));
+    tl = tiledlayout(fig, 1, n, 'Padding','compact', 'TileSpacing','compact');
+
+    % Project every model first, so the shared limits cover all three. Same
+    % helper Figure A uses, with the other axis pair: along Y onto XZ.
+    PG = cell(n,1);
+    xs = []; zs = [];
+    for i = 1:n
+        PG{i} = local_project_union(TRI{i}, 1, 3);     % x, z
+        [xi, zi] = boundingbox(PG{i});
+        xs = [xs, xi]; zs = [zs, zi]; %#ok<AGROW>
+        xs = [xs, min(HULL{i}(:,1)), max(HULL{i}(:,1))]; %#ok<AGROW>
+        zs = [zs, min(HULL{i}(:,2)), max(HULL{i}(:,2))]; %#ok<AGROW>
+    end
+    MARGIN = 2;                      % mm, fixed, as in Figure B
+    XL = [min(xs)-MARGIN, max(xs)+MARGIN];
+    ZL = [min(zs)-MARGIN, max(zs)+MARGIN];
+
+    for i = 1:n
+        ax = nexttile(tl); hold(ax,'on');
+
+        % Same silhouette treatment as every other panel in this file: grey
+        % fill, thin black boundary, holes left white, no wireframe.
+        plot(PG{i}, 'Parent', ax, 'FaceColor', [0.85 0.85 0.85], ...
+             'FaceAlpha', 1, 'EdgeColor', 'k', 'LineWidth', 0.8);
+
+        % The intruding region's hull, in Figure B's red dashed style.
+        plot(ax, HULL{i}(:,1), HULL{i}(:,2), 'r--', 'LineWidth', 1.2);
+
+        xlim(ax, XL); ylim(ax, ZL);
+        local_style_axes(ax, 'x (mm)', 'z (mm)', '', 8);
+        title(ax, name(i), 'FontSize', 8, 'FontWeight', 'normal');
+    end
+
+    title(tl, sprintf(['Full assembly viewed along the drop axis (grey), ' ...
+                       'with the intruding hull at y = %g mm (red)'], opt.CutY), ...
+          'FontSize', 9);
 end
 
 % ═════════════════════════════════════════════════════════════════════════
