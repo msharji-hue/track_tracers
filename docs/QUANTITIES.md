@@ -355,6 +355,94 @@ quarantine would delete the very rows it is meant to preserve.
 
 ---
 
+## Figure 1 — kinematics figure
+
+`scripts/fig_kinematics.m`. Depth, velocity and net acceleration against time
+from impact, per foot model.
+
+**Pre-agreed caption language:**
+
+> Curves are pointwise medians over replicate drops. Zero-drop trials are
+> reserved for scalar measurements and are not shown in the time-history
+> figures. Net acceleration is shown over the interval between impact and stop,
+> the range over which the pipeline resolves it. All quantitative fits use
+> unmodified kinematics.
+
+**Display layer.** Every step below affects the drawing only. Nothing is
+written back, and no fit sees any of it:
+
+| step | applies to |
+|---|---|
+| resample each replicate onto a uniform grid (`GridMs`, default 0.2 ms) relative to impact | all rows |
+| after each trial's OWN detected `t_stop` (`kin.t_stop_s`, never the quarantined table scalar), fill ALL of that trial's remaining grid points — to the end of the grid, not just to its own last sample — with its measured **rest state** — `v = 0`, depth = its `d_final`, `a + g = NaN`. Filling to the grid end is what keeps a trial in the pointwise aggregate for the whole drawn interval; stopping at its last sample leaves NaNs *inside* the region and can void the median mid-curve. Where a recording ends before its detected `t_stop`, rest-fill begins at that last sample instead — an approximation, counted and reported as `nShortRec` under `'Diagnose', true` | depth, v (not `a + g`: the pipeline computes no post-stop acceleration, and none is invented here) |
+| pointwise `Average` across the **full replicate set** (`'median'` default, or `'mean'`) at every grid point | all rows |
+| curve terminates at the height's **median replicate `t_stop`** — the same endpoint in all three panels | all rows |
+| `movmean` per row (`SmoothMs`: depth 1.0 ms, v 2.0 ms, a+g 1.5 ms), applied AFTER aggregation; NaN-aware and edge-shrinking, so the leading edge at impact is neither shifted nor truncated; the pre-smoothing NaN mask is re-applied afterward | each row independently |
+| on the default linear axis, nothing is masked or clipped. Under `'AccelScale','log'` only, mask `a + g <= AccelYMin` to NaN, since a log axis cannot render non-positive values | `a + g` only |
+
+**Why rest-extension replaced "terminate below `MinReplicates`".** Replicates
+stop at different times. Under the old rule, past the earliest stop the
+aggregate was taken over only the longest-lasting trials — survivor bias — and
+the curve was pulled toward them before ending early. Filling each trial's rest
+state keeps every replicate in the aggregate for its whole duration; run with
+`'Diagnose', true` for the per-height replicate `t_stop` spread, the support
+count at the curve's endpoint under both rules, and confirmation that display
+smoothing does not shift the `a + g` onset. `MinReplicates` (default 3) now
+gates only whether a height is **plotted at all**, not where a curve ends.
+
+A consequence to check in the render: `v` decays to ~0 at the endpoint by
+**construction of the median** — about half the replicates are already at rest
+there — not by being forced to zero.
+
+**Zero-drop trials are excluded by default** (`'ShowZeroDrop'`, default
+`false`): they are reserved for scalar measurements and are not shown in these
+time-history figures. The individual-intrusion overlay rule (a zero-drop trial
+drawn as its own thin curve, depth/v only, when its depth range over the whole
+recorded trace exceeds `IntrusionThreshCm`) is retained behind the same option
+rather than deleted, and is otherwise unchanged: a threshold rule evaluated
+against the unwindowed trace, not a hardcoded tag list.
+
+**`a + g` is shown over `[impact, stop]` only.** `kd_kinematics` masks its
+stored `a` — and therefore `a + g` — to NaN outside `[impact_index, stopFrame]`,
+and the figure plots exactly that. The figure reconstructs no pre-impact
+acceleration and inserts no synthetic onset point; every plotted sample is a
+measured one, and the row simply begins at impact.
+
+**`a + g` (row c) is on a linear y-axis by default.** Over `[impact, stop]` this
+rig's values span roughly `1e3`–`2.2e4` cm/s² — about one decade — where a
+linear axis reads more directly than a log one. (KD 2007 Fig. 1c is logarithmic
+because their 20 µs sampling resolves `1e1`–`1e4`, three decades.) Pass
+`'AccelScale','log'` for the KD-matched log presentation, floored at
+`AccelYMin` (default `1e2` cm/s²). There is no dashed reference line at `g`.
+Depth and v are never clamped; v's y-axis lower limit is fixed at 0.
+
+**Axis margins.** Every axis is padded by 5% of its drawn data range, so no
+curve, marker or endpoint sits on the frame. Limits are computed once from the
+pooled drawn data and shared across models within each row.
+
+**Style.** A dashed vertical line at `t = 0` in every panel; a solid thin line
+at `depth = 0` in the depth panel (the bed surface); no other reference lines.
+Axes convention (`hold`/`grid`/`box`) comes from `src/apply_fig_style.m`, shared
+with `scripts/depth_scaling.m` so the two figure families stay matched; change
+the house style there and both follow. Every panel keeps full numeric tick
+labels on both axes and its own x-label.
+
+**Layout.** `'per-model'` (default) writes three figures, one per model, each
+a 3×1 vertical stack sharing the time axis, single-column APS width. `'grid3x3'`
+reproduces the earlier combined rows-×-models figure in one file. Axis limits
+are identical across models within each row in both layouts.
+
+**`Style`** selects the presentation: `'mean'` (default) is the figure above;
+`'trials'` draws every kept trial individually and unaveraged, for QA (no rest
+extension — each trial ends at its own stop), sharing the same drawing code so
+the two are directly comparable.
+
+**Reportable scalars.** `fig1_kinematics_stops.csv` (model, height, median v0,
+median `t_stop`, n) is written alongside the figures for the cross-geometry
+comparison.
+
+---
+
 ## Which trials are excluded, and by what
 
 `src/load_kinematics_set.m` → the rules block; `src/get_manual_exclusions.m`.
