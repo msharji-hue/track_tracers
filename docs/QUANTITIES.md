@@ -501,6 +501,59 @@ fluid with a yield stress).
 
 ---
 
+## Figure 1 — kinematics figure
+
+`scripts/fig_kinematics.m`. Depth, velocity and net acceleration against time
+from impact, one column per foot model.
+
+**Pre-agreed caption language:**
+
+> Curves are per-height ensemble means over replicate drops, processed
+> identically at every height including h = 0 (a+g at h = 0 shown as g, derived
+> from the measured flat v). Measured h = 0 displacement is below imaging
+> resolution (< 0.01 cm). Velocity and a+g are clamped at zero for display; all
+> quantitative fits use unmodified kinematics.
+
+**What the display layer does.** Every step below affects the drawing only.
+Nothing is written back, and no fit sees any of it:
+
+| step | applies to |
+|---|---|
+| interpolate each replicate onto a uniform grid (`GridMs`, default 0.2 ms) relative to impact | all rows |
+| average across replicates point by point, using only trials with data there | all rows |
+| terminate where fewer than `MinReplicates` (default 3) trials remain | all rows |
+| `movmean` over `SmoothAccelMs` (default 1.5 ms), after averaging, before clamping | `a + g` only |
+| clamp at `max(value, 0)` | `v` and `a + g` only — depth unclamped |
+
+Shorter trials are never padded with their final value: that would draw a
+plateau no trial measured. Coverage falls off at both ends because pre-impact
+context and stop times differ per trial, so curves end where the replicates do.
+
+**The h = 0 anchor** goes through the identical path for depth and velocity —
+same grid, same averaging, same termination — from the measured zero-drop
+traces. Those traces are intact; it is the zero-drop *scalars* that
+`load_kinematics_set` quarantines (see above). Zero-drop trials have no
+meaningful stop, so their window is the full available span.
+
+For `a + g` only, the pipeline reports nothing at h = 0: `a_plus_g` is NaN
+outside the `[impact, stop]` window and that window is degenerate without an
+impact. The anchor is therefore the constant `g`, derived from the measured
+flat `v` (`a = dv/dt = 0` → `a + g = g`).
+
+> ⚠️ **Unresolved sign question.** Substituting `a = 0` into the pipeline's own
+> `a_plus_g = -a - g` gives **−g**, not **+g**. The h = 0 anchor and the h > 0
+> curves may therefore be on opposite sign conventions, and the display clamp
+> hides it: a pipeline value of −980 clamps to 0 while the anchor sits at +980.
+> The script implements the caption as agreed and flags this in its header. It
+> needs resolving in `kd_kinematics` or in the caption — not in the plotting
+> script — before publication.
+
+**`Style`** selects the presentation: `'mean'` (default) is the figure above;
+`'trials'` draws every kept trial unaveraged, for QA, with the same clamps so
+the two are comparable.
+
+---
+
 ## `A_bare` and `A_hull` — intruding foot area
 
 `scripts/fig_foot_schematic.m`, computed from the STLs in `cad/`.
