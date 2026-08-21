@@ -473,6 +473,54 @@ fluid with a yield stress).
 
 ---
 
+## `A_bare` and `A_hull` — intruding foot area
+
+`scripts/fig_foot_schematic.m`, computed from the STLs in `cad/`.
+
+Both are areas of the foot **projected normal to the drop axis**, counting only
+the part that enters the bed.
+
+**The cut.** The STL drop axis is `−Y` (toes first). Everything at
+`y <= CutY` intrudes; `CutY` defaults to **−50 mm**, the beam top. Triangles
+crossing that plane are clipped (Sutherland–Hodgman) rather than dropped —
+discarding them would remove area exactly at the plane where it is being
+measured.
+
+**The projection.** Clipped triangles are projected onto **XZ**, the plane
+normal to the drop axis. Projecting onto XY instead would give the side
+silhouette, which is a different quantity.
+
+| quantity | definition |
+|---|---|
+| `A_bare` | area of the union of the projected triangles, as a `polyshape`. Gaps between the toes are **holes** and are not counted. |
+| `A_hull` | area of the convex hull of the same projected vertices. The swept envelope, gaps included. |
+
+Reported in cm² (`polyshape` area is mm², divided by 100).
+
+**Why both.** The three models differ *only* in toe splay. `A_bare` is therefore
+identical across them — same beam, same toes, just rotated — and only `A_hull`
+grows. Any difference in penetration between models cannot be attributed to
+intruding area in the bare sense; the hull is what changes.
+
+| model | `A_bare` (cm²) | `A_hull` (cm²) | ratio |
+|---|---|---|---|
+| Tight | 2.122 | 2.607 | 1.23 |
+| Default | 2.122 | 3.495 | 1.65 |
+| Wide | 2.122 | 4.052 | 1.91 |
+
+Computed independently (trimesh/shapely, 2026-08-20) and asserted by the script
+at 2% relative tolerance on every run. A mismatch aborts before any figure is
+written.
+
+**Sensitivity to the cut.** Both areas change by roughly **4–5% per mm** of
+`CutY`, and the shift is nearly uniform across the three models — so the
+**ratios above are insensitive** to the exact cut, even though the absolute
+values are not. Quote `A_hull/A_bare` when comparing models; quote an absolute
+area only alongside the `CutY` it was computed at. Every value the script writes
+carries its `CutY`, in the CSV and in the figure title.
+
+---
+
 ## φ and `rho_g`
 
 `src/get_substrate_properties.m` — single source of truth, keyed on
