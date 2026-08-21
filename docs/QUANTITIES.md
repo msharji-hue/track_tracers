@@ -284,7 +284,35 @@ depth. Noted in `src/get_calibration.m`.
 `v_smooth`/`depthRod_cm` are cut at `stopFrame + postCapFrames`
 (`'postCapMs'`, default from `calib.postCapMs`).
 
-`a_plus_g = -a - g` is the net resistive acceleration in the project convention.
+### `a + g` — net grain acceleration
+
+`kin.a_plus_g = g - a`, the acceleration the grains supply once gravity is
+accounted for. Depth is positive into the bed, so a free-falling rod has
+`a = +g` and three checkpoints fix both the sign and the offset:
+
+| state | `a` | `a + g` |
+|---|---|---|
+| free fall | `+g` | `0` — nothing but gravity |
+| at rest | `0` | `+g` — the bed carries the weight |
+| decelerating | `-abs(a)` | `g + abs(a)` — large positive |
+
+This matches KD 2007 Fig. 1.
+
+**Corrected 2026-08.** The formula was previously `-a - g`: the same quantity
+offset by a constant `-2g`, with the rest state inverted, so free fall sat at
+`-2g` and a resting rod at `-g` instead of `+g`.
+
+**It was display-only.** No fit and no reported scalar ever read it — `a_stop`
+is fitted to velocity in `find_stop`, `v0` comes from `v_smooth`, `d_final` from
+`depthRod_cm`, and neither `load_kinematics_set` nor `depth_scaling` touches it.
+Only figures were wrong.
+
+**Stored `_kin.mat` files written before the fix still carry the old formula**
+in their `a_plus_g` column. That is harmless: the raw `a` trace beside it was
+never affected, and every consumer now recomputes through `src/net_accel.m`
+(`g - a`) rather than reading the stored column. Already-processed trials
+therefore render correctly with no Stage B re-run. Re-running Stage B refreshes
+the column itself, but nothing depends on that.
 
 ---
 
