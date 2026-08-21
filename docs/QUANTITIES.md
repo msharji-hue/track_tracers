@@ -355,6 +355,68 @@ quarantine would delete the very rows it is meant to preserve.
 
 ---
 
+## Figure 1 — kinematics figure
+
+`scripts/fig_kinematics.m`. Depth, velocity and net acceleration against time
+from impact, per foot model.
+
+**Pre-agreed caption language:**
+
+> Curves are pointwise medians over replicate drops, processed identically at
+> every height including h = 0. Zero-drop trials are displayed on the same
+> footing as all other heights; in the Tight geometry, two of ten zero-drop
+> trials exhibited measurable intrusion (0.74 and 0.96 cm) and are shown
+> individually, while the remaining zero-drop trials showed displacement at the
+> imaging-resolution scale (< 0.02 cm). Net acceleration is plotted on a
+> logarithmic axis following Katsuragi & Durian (2007) Fig. 1c, with the dashed
+> line at g. All quantitative fits use unmodified kinematics.
+
+**Display layer.** Every step below affects the drawing only. Nothing is
+written back, and no fit sees any of it:
+
+| step | applies to |
+|---|---|
+| interpolate each replicate onto a uniform grid (`GridMs`, default 0.2 ms) relative to impact, using each trial's OWN `[-PreCapMs, t_stop]` window | all rows, every height including h = 0 |
+| pointwise `Average` across replicates (`'median'` default, or `'mean'`), using only trials with data at that grid point | all rows |
+| terminate where fewer than `MinReplicates` (default 3) trials remain | all rows |
+| `movmean` per row (`SmoothMs`: depth 1.0 ms, v 2.0 ms, a+g 3.0 ms), applied AFTER aggregation, with the pre-smoothing NaN mask re-applied afterwards | each row independently |
+| mask `a + g <= 0` to NaN (log axis) | `a + g` only |
+
+Shorter trials are never padded with their final value. The re-applied NaN mask
+after smoothing is also what stops a curve from drawing a connector down to the
+axis at its start or end: MATLAB breaks a line at NaN.
+
+**h = 0 is not special-cased.** The same grid, aggregation, termination and
+windowing (each trial's own `kin.stopFrame`, not the quarantined table scalar)
+apply as for every other height. `load_kinematics_set` quarantines the
+zero-drop **scalars** (`d_final`, `t_stop`, `a_stop` are NaN in the loaded
+table); it does not touch the **traces**, which is what this figure reads
+directly from each `_kin.mat`.
+
+**Individual zero-drop overlays.** A zero-drop trial is drawn as its own thin
+curve (depth and v panels only, the h = 0 colour) whenever its depth range over
+the **whole recorded trace** exceeds `IntrusionThreshCm` (default 0.1 cm) — a
+threshold rule evaluated against every zero-drop trial, not a hardcoded tag
+list. The threshold is checked against the unwindowed trace because it is a
+fact about the trial, independent of the display window.
+
+**`a + g` (row c) is on a log y-axis**, matching KD 2007 Fig. 1c. Values `<= 0`
+are masked rather than clamped — a log axis cannot show them, and clamping
+would misrepresent rather than omit. h = 0 draws no curve in this row; the
+dashed reference line at `g` is its quasi-static anchor. Depth and v are never
+clamped in this figure (unlike an earlier draft of this script).
+
+**Layout.** `'per-model'` (default) writes three figures, one per model, each
+a 3×1 vertical stack sharing the time axis, single-column APS width. `'grid3x3'`
+reproduces the earlier combined rows-×-models figure in one file. Axis limits
+are identical across models within each row in both layouts.
+
+**`Style`** selects the presentation: `'mean'` (default) is the figure above;
+`'trials'` draws every kept trial individually and unaveraged, for QA, sharing
+the same per-row smoothing and drawing code so the two are directly comparable.
+
+---
+
 ## Which trials are excluded, and by what
 
 `src/load_kinematics_set.m` → the rules block; `src/get_manual_exclusions.m`.
@@ -498,52 +560,6 @@ A third, unrelated `d0` appears in the `velocity` and `literature` forms as the
 **intercept** of `d = a·v0^(2/3) + d0` and `d = d0 + α·v0` respectively. The
 latter permits a negative intercept (de Bruyn & Walsh model it as a Bingham
 fluid with a yield stress).
-
----
-
-## Figure 1 — kinematics figure
-
-`scripts/fig_kinematics.m`. Depth, velocity and net acceleration against time
-from impact, one column per foot model.
-
-**Pre-agreed caption language:**
-
-> Curves are per-height ensemble means over replicate drops, processed
-> identically at every height including h = 0 (a+g at h = 0 shown as g, derived
-> from the measured flat v). Measured h = 0 displacement is below imaging
-> resolution (< 0.01 cm). Velocity and a+g are clamped at zero for display; all
-> quantitative fits use unmodified kinematics.
-
-**What the display layer does.** Every step below affects the drawing only.
-Nothing is written back, and no fit sees any of it:
-
-| step | applies to |
-|---|---|
-| interpolate each replicate onto a uniform grid (`GridMs`, default 0.2 ms) relative to impact | all rows |
-| average across replicates point by point, using only trials with data there | all rows |
-| terminate where fewer than `MinReplicates` (default 3) trials remain | all rows |
-| `movmean` over `SmoothAccelMs` (default 1.5 ms), after averaging, before clamping | `a + g` only |
-| clamp at `max(value, 0)` | `v` and `a + g` only — depth unclamped |
-
-Shorter trials are never padded with their final value: that would draw a
-plateau no trial measured. Coverage falls off at both ends because pre-impact
-context and stop times differ per trial, so curves end where the replicates do.
-
-**The h = 0 anchor** goes through the identical path for depth and velocity —
-same grid, same averaging, same termination — from the measured zero-drop
-traces. Those traces are intact; it is the zero-drop *scalars* that
-`load_kinematics_set` quarantines (see above). Zero-drop trials have no
-meaningful stop, so their window is the full available span.
-
-For `a + g` only, the pipeline reports nothing at h = 0: `a_plus_g` is NaN
-outside the `[impact, stop]` window and that window is degenerate without an
-impact. The anchor is therefore the constant `g`, derived from the measured
-flat `v` (`a = dv/dt = 0` → `a + g = g`).
-
-
-**`Style`** selects the presentation: `'mean'` (default) is the figure above;
-`'trials'` draws every kept trial unaveraged, for QA, with the same clamps so
-the two are comparable.
 
 ---
 
