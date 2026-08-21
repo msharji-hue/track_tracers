@@ -540,13 +540,6 @@ outside the `[impact, stop]` window and that window is degenerate without an
 impact. The anchor is therefore the constant `g`, derived from the measured
 flat `v` (`a = dv/dt = 0` → `a + g = g`).
 
-> ⚠️ **Unresolved sign question.** Substituting `a = 0` into the pipeline's own
-> `a_plus_g = -a - g` gives **−g**, not **+g**. The h = 0 anchor and the h > 0
-> curves may therefore be on opposite sign conventions, and the display clamp
-> hides it: a pipeline value of −980 clamps to 0 while the anchor sits at +980.
-> The script implements the caption as agreed and flags this in its header. It
-> needs resolving in `kd_kinematics` or in the caption — not in the plotting
-> script — before publication.
 
 **`Style`** selects the presentation: `'mean'` (default) is the figure above;
 `'trials'` draws every kept trial unaveraged, for QA, with the same clamps so
