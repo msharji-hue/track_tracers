@@ -11,7 +11,19 @@ function K = load_kinematics_set(root, varargin)
 %   'series' is true). Returns one row per trial with, at minimum:
 %     trialTag, model, condition, dropHeight_mm, fps, impactFrame, stopFrame,
 %     v0_cm_s, d_final_cm, a_stop_cm_s2, impactDistPx, bedX
-%   plus the *_meas companions described under ZERO-DROP QUARANTINE below.
+%   plus the *_meas companions described under ZERO-DROP QUARANTINE below,
+%   and dropHeight_asRecorded / relabeled described under HEIGHT RELABELING.
+%
+%   HEIGHT RELABELING. dropHeight_mm is corrected at read time from
+%   get_relabel_map, for the handful of trials whose recorded height label is
+%   known to be wrong. Nothing on disk is modified -- see get_relabel_map for
+%   why. Two columns record what happened:
+%
+%     dropHeight_asRecorded  the label as it came off the CSV
+%     relabeled              true where dropHeight_mm came from the map
+%
+%   dropHeight_mm is the corrected height and is what every height axis, bin
+%   and fit should use. dropHeight_asRecorded is provenance, not a measurement.
 %
 %   ZERO-DROP QUARANTINE. A d0 trial is released FROM CONTACT: no fall, no
 %   impact, no deceleration. kd_kinematics is a dynamic-impact pipeline and is
@@ -55,7 +67,13 @@ function K = load_kinematics_set(root, varargin)
 %       'dropNaNDepth' true;  drop h > 0 trials with non-finite d_final_cm
 %       'dropGlitch'   true;  drop h > 0 trials failing the monotonic-|v| test
 %       'depthCut'     [];    drop h > 0 trials deeper than this (cm)
+%       'v0RatioMax'   1.15;  free-fall bound for the v0 consistency guard,
+%                             as a multiple of sqrt(2*g*h). WARNS, never drops
 %       'verbose'      true;  print the per-rule breakdown
+%
+%   Option names are matched case-insensitively, and an unrecognised name is an
+%   ERROR rather than a silently ignored no-op -- a mistyped 'v0RatioMax' would
+%   otherwise disable the consistency guard without any sign that it had.
 %
 %   GEOMETRY. Two tag conventions coexist: the validated drop trials carry no
 %   model suffix (165mm_T03_full) while the newer zero-drop trials do
@@ -79,8 +97,22 @@ opt.series       = false;
 opt.dropNaNDepth = true;
 opt.dropGlitch   = true;
 opt.depthCut     = [];
+opt.v0RatioMax   = 1.15;
 opt.verbose      = true;
-for i = 1:2:numel(varargin), opt.(varargin{i}) = varargin{i+1}; end
+
+% Case-insensitive, and unknown names stop rather than being absorbed as new
+% struct fields nothing ever reads. The v0 guard below is the reason this
+% matters: an option that silently does nothing is worse than no option.
+optNames = fieldnames(opt);
+for i = 1:2:numel(varargin)
+    j = find(strcmpi(optNames, varargin{i}), 1);
+    if isempty(j)
+        error('load_kinematics_set:unknownOption', ...
+              'Unknown option "%s". Valid options: %s', ...
+              string(varargin{i}), strjoin(optNames', ', '));
+    end
+    opt.(optNames{j}) = varargin{i+1};
+end
 
 exclude = string(opt.exclude(:));
 
@@ -161,6 +193,42 @@ if ~isempty(dupTags)
                         'and re-run.\nDo not filter them out here: which copy is ' ...
                         'current is a decision only you can make.\n'])];
     error('load_kinematics_set:duplicateTrialTag', '%s', msg);
+end
+
+% ── read-time height relabeling ──────────────────────────────────────────
+% A few trials carry a recorded height that review established is wrong.
+% get_relabel_map holds the corrections, one line per trial with its reason
+% and date; this is the ONLY place they are applied, and nothing on disk is
+% touched (the trialTag itself still says the old height -- deliberately, so
+% provenance back to the capture session survives).
+%
+% Applied HERE, before isZeroDrop and before the quarantine, because the
+% corrected height is the physical truth: if a relabel ever moved a trial to
+% or from h = 0, every rule downstream must see the corrected value, not the
+% recorded one.
+R = get_relabel_map();
+K.dropHeight_asRecorded = K.dropHeight_mm;
+K.relabeled             = false(height(K),1);
+if height(R) > 0
+    [tf, loc] = ismember(K.trialTag, R.trialTag);
+    K.dropHeight_mm(tf) = R.dropHeight_mm(loc(tf));
+    K.relabeled         = tf;   % true = this height came from the map
+    if any(tf)
+        fprintf('  relabeled: %d trial(s) (see get_relabel_map)\n', sum(tf));
+        if opt.verbose
+            for i = find(tf(:).')
+                fprintf('             %-28s %g -> %g mm\n', K.trialTag(i), ...
+                    K.dropHeight_asRecorded(i), K.dropHeight_mm(i));
+            end
+        end
+    end
+    % A mapped tag that matches no file is a correction doing nothing at all.
+    % Report it the way the manual-exclusion list reports its own misses.
+    missR = R.trialTag(~ismember(R.trialTag, K.trialTag));
+    if ~isempty(missR)
+        fprintf('  relabel entries matching no file : %d\n', numel(missR));
+        fprintf('             %s\n', missR);
+    end
 end
 
 K.isZeroDrop = K.dropHeight_mm == 0;
@@ -277,6 +345,70 @@ if opt.verbose
 end
 
 K = K(K.keep, :);
+
+% ── v0 consistency guard ─────────────────────────────────────────────────
+% Every kept h > 0 trial is checked against the free-fall speed its label
+% implies. This is a GUARD, not a rule: it warns and counts, it never drops.
+% Which trials to remove is a review decision that belongs in
+% get_manual_exclusions with a reason attached, not in an automatic filter
+% that would quietly reshape a bin the next time a threshold moved.
+%
+% Two failure modes, and they are not symmetric:
+%
+%   HIGH SIDE  v0 > v0RatioMax * sqrt(2*g*h) is a physical impossibility once
+%              the tolerance is allowed for -- a body released from h cannot
+%              arrive faster than free fall. A violation means the LABEL is
+%              wrong (contamination between height bins) or the TIME BASE is
+%              wrong (fps, or dropped frames as in campaign 1). Either way the
+%              trial's v0 and everything derived from it are suspect, and this
+%              must never pass silently: it is exactly the failure that the
+%              relabeling work of 2026-08-21 was chasing.
+%
+%   LOW SIDE   v0 < 0.5 * sqrt(2*g*h) is not impossible -- release friction, a
+%              snagged line, a late trigger. It is a detector for a spoiled
+%              release (the known 85 mm Default trial at 39.9 cm/s), so the
+%              threshold is deliberately loose: half of free fall is far below
+%              any honest air-drag loss over these heights.
+%
+% Real drops land a few percent BELOW free fall, so the healthy ratio is just
+% under 1. Two campaigns sit systematically above it because their release
+% height reference was offset -- see the data notes in README.md; those
+% warnings are documented behaviour, not bad trials.
+G_CM_S2 = 980;    % as calib.g_cm_s2 (get_calibration.m) and net_accel's fallback
+
+vFree = sqrt(2 * G_CM_S2 * K.dropHeight_mm / 10);   % cm/s, from the CORRECTED height
+chkV0 = ~K.isZeroDrop & K.dropHeight_mm > 0 & isfinite(vFree) & isfinite(K.v0_cm_s);
+
+K.v0_freefall_ratio = nan(height(K),1);             % v0 / sqrt(2gh); NaN where undefined
+K.v0_freefall_ratio(chkV0) = K.v0_cm_s(chkV0) ./ vFree(chkV0);
+
+hiV0 = chkV0 & K.v0_cm_s > opt.v0RatioMax * vFree;
+loV0 = chkV0 & K.v0_cm_s < 0.5 * vFree;
+
+for i = find(hiV0(:).')
+    warning('load_kinematics_set:v0AboveFreeFall', ...
+        ['%s: v0 = %.1f cm/s EXCEEDS the free-fall bound %.1f cm/s ' ...
+         '(%.2f x sqrt(2gh) at h = %g mm, limit %.2f). A drop cannot be ' ...
+         'faster than free fall: suspect the height label or the time base.'], ...
+        K.trialTag(i), K.v0_cm_s(i), opt.v0RatioMax*vFree(i), ...
+        K.v0_freefall_ratio(i), K.dropHeight_mm(i), opt.v0RatioMax);
+end
+for i = find(loV0(:).')
+    warning('load_kinematics_set:v0BelowHalfFreeFall', ...
+        ['%s: v0 = %.1f cm/s is below half the free-fall speed %.1f cm/s ' ...
+         '(%.2f x sqrt(2gh) at h = %g mm). Suspect a snagged or spoiled ' ...
+         'release.'], ...
+        K.trialTag(i), K.v0_cm_s(i), vFree(i), ...
+        K.v0_freefall_ratio(i), K.dropHeight_mm(i));
+end
+
+if opt.verbose
+    fprintf('\n--- v0 consistency guard (warns, never drops) ---\n');
+    fprintf('  checked            : %3d kept h > 0 trials\n', sum(chkV0));
+    fprintf('  above free fall    : %3d  (v0 > %.2f x sqrt(2gh))\n', ...
+        sum(hiV0), opt.v0RatioMax);
+    fprintf('  below half free fall: %2d  (v0 < 0.50 x sqrt(2gh))\n', sum(loV0));
+end
 
 % ── optional time series ─────────────────────────────────────────────────
 if opt.series
