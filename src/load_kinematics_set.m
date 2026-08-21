@@ -4,7 +4,7 @@ function K = load_kinematics_set(root, varargin)
 %   K = load_kinematics_set(root)
 %       'model'      ''|'Default'|'Tight'|'Wide'   geometry from tag suffix
 %       'condition'  ''|'GB/full'|...              material/container
-%       'exclude'    {}                            trialTags to drop
+%       'exclude'    get_manual_exclusions()        trialTags to drop
 %       'series'     false                         also return z/v/a+g arrays
 %
 %   Reads <container>/kinematics/*_kin_scalars.csv (and *_kin.mat when
@@ -43,7 +43,13 @@ function K = load_kinematics_set(root, varargin)
 %   OPTIONS
 %       'model'       '' (all) | 'Default' | 'Tight' | 'Wide'
 %       'condition'   '' (all) | 'GB/full' | 'GB/shallow' | 'CHIN/dense' | ...
-%       'exclude'     cellstr/string array of trialTags to drop outright
+%       'exclude'     cellstr/string array of trialTags to drop outright.
+%                     DEFAULTS to get_manual_exclusions(), the reviewed list,
+%                     so every analysis through this loader drops the same
+%                     trials without keeping its own copy. Passing this option
+%                     REPLACES that list rather than adding to it -- pass
+%                     [get_manual_exclusions(); "extra_tag"] to extend it, or
+%                     strings(0,1) to disable manual exclusion entirely.
 %       'series'      false; when true also loads kin.z / kin.v / kin.t_s and
 %                     returns them as a cell column per trial
 %       'dropNaNDepth' true;  drop h > 0 trials with non-finite d_final_cm
@@ -68,7 +74,7 @@ function K = load_kinematics_set(root, varargin)
 
 opt.model        = '';
 opt.condition    = '';
-opt.exclude      = strings(0,1);
+opt.exclude      = get_manual_exclusions();
 opt.series       = false;
 opt.dropNaNDepth = true;
 opt.dropGlitch   = true;

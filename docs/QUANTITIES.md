@@ -327,6 +327,61 @@ quarantine would delete the very rows it is meant to preserve.
 
 ---
 
+## Which trials are excluded, and by what
+
+`src/load_kinematics_set.m` → the rules block; `src/get_manual_exclusions.m`.
+
+Two kinds of exclusion, kept deliberately apart.
+
+**Automatic rules** — conditions the code can test, applied to `h > 0` trials
+only (a released-from-rest trial has no fall or deceleration to test):
+
+| flag | rule | option |
+|---|---|---|
+| `NaNDEPTH` | `d_final_cm` not finite | `'dropNaNDepth'` (default true) |
+| `GLITCH` | \|v\| does not fall monotonically from `v0` to zero between impact and stop; an increase above 15% of `v0` marks a tracking artefact | `'dropGlitch'` (default true) |
+| `depth cut` | `d_final_cm` greater than the cut | `'depthCut'` (default off) |
+
+**Manual exclusions** — judgements the code cannot make, listed in
+`src/get_manual_exclusions.m`, one tag per line with its own reason and date:
+
+```matlab
+"345mm_T02_full_default"   % stop-fit failure / bad velocity profile, 2026-08-20 review
+```
+
+That file is the single source of truth. `load_kinematics_set` applies it **by
+default**, so every analysis reaching data through the loader drops the same
+trials — this is what stopped the per-script copies from drifting apart when
+`load_default_gb` was retired.
+
+As of the 2026-08-20 review it holds **23 Default GB/full trials**, all excluded
+for stop-fit failure or a bad velocity profile.
+
+**Overriding.** Passing `'exclude'` **replaces** the list rather than adding to
+it:
+
+```matlab
+load_kinematics_set(root)                                       % reviewed list
+load_kinematics_set(root, 'exclude', strings(0,1))              % none
+load_kinematics_set(root, 'exclude', [get_manual_exclusions(); "extra_tag"])
+```
+
+`depth_scaling` forwards `'exclude'` only when the caller actually set it — its
+own default is `[]`, meaning *unset*. Forwarding an unset default would have
+replaced the reviewed list with an empty one and silently re-included every
+excluded trial.
+
+**Traceability.** The returned table carries `keep` and `reason`, so an
+exclusion can be traced rather than silently applied, and the verbose report
+prints the per-rule counts plus any listed tag that matched no file on disk —
+a stale tag left after a rename is otherwise invisible.
+
+Anything expressible as a rule belongs in the rules, not in the manual list.
+To retire a manual exclusion, delete its line: git history is the record of
+what was once excluded, and a commented-out tag reads as ambiguous forever.
+
+---
+
 ## Per-height binning
 
 `scripts/depth_scaling.m` → section 3, "per-height means".

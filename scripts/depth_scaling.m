@@ -54,7 +54,10 @@ function R = depth_scaling(root, varargin)
 %       'form'       'ambroso' | 'powerlaw' | 'literature' | 'velocity'
 %       'model'      '' | 'Default' | 'Tight' | 'Wide'   (default 'Default')
 %       'condition'  '' (all present) | 'GB/full' | ...
-%       'exclude'    trialTags to drop; honoured rather than re-derived
+%       'exclude'    trialTags to drop. Unset (default) leaves
+%                    load_kinematics_set's reviewed list from
+%                    get_manual_exclusions() in force. Setting it REPLACES that
+%                    list; pass strings(0,1) to disable manual exclusion.
 %       'MinRep'     min trials per drop setting to form a mean (default 3)
 %       'RefV0'      reference speed for the t_stop comparison (default 250)
 %       'RefCond'    reference condition for the density checks
@@ -70,7 +73,11 @@ G = 980;                                   % cm/s^2
 opt.form      = 'ambroso';
 opt.model     = 'Default';
 opt.condition = '';
-opt.exclude   = strings(0,1);
+% [] means "not specified": leave load_kinematics_set's default (the reviewed
+% manual-exclusion list) in place. Anything non-numeric -- a cellstr, a string
+% array, even an empty one -- is an explicit choice and is passed through,
+% REPLACING that default.
+opt.exclude   = [];
 opt.MinRep    = 3;
 opt.RefV0     = 250;
 opt.RefCond   = "GB/full";
@@ -90,8 +97,14 @@ if ~isfolder(opt.OutDir), mkdir(opt.OutDir); end
 fprintf('\n=== depth_scaling (form: %s) ===\n', form);
 
 % ── 1) data ──────────────────────────────────────────────────────────────
-K = load_kinematics_set(root, 'model', opt.model, 'condition', opt.condition, ...
-                              'exclude', opt.exclude, 'depthCut', opt.DepthCut);
+% 'exclude' is forwarded ONLY when the caller set it. Forwarding an unset
+% default would overwrite the loader's manual-exclusion list with an empty one,
+% silently re-including every reviewed-out trial.
+lkArgs = {'model', opt.model, 'condition', opt.condition, 'depthCut', opt.DepthCut};
+if ~isnumeric(opt.exclude)
+    lkArgs = [lkArgs, {'exclude', opt.exclude}];
+end
+K = load_kinematics_set(root, lkArgs{:});
 
 % Fits need a real fall and a real penetration. Zero-drop trials are kept by the
 % loader for QA but are quarantined there -- no impact means no depth, stop or
