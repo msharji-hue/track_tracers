@@ -315,7 +315,7 @@ function P = track_tracers_2(mode, target, opts)
         end
 
         if ~strcmp(opts.figures,'none')
-            f1 = fig_triptych(kin, meta);
+            f1 = fig_triptych(kin, meta, calib);
             if strcmp(opts.figures,'save')
                 saveas(f1, fullfile(it.kinDir,[it.trialTag '_kin_triptych.png']));
                 close(f1);
@@ -470,7 +470,7 @@ function log_kin_row(L, i, total, it, status, reason, kin)
 end
 
 % ── figures (test/single only) ────────────────────────────────────────────
-function f = fig_triptych(kin, meta)
+function f = fig_triptych(kin, meta, calib)
     tag = getfld(meta,'trialTag','?');
     f = figure('Name',['Kinematics — ' tag],'Color','w');
     t = kin.t_s;
@@ -480,7 +480,9 @@ function f = fig_triptych(kin, meta)
     xline(0,'--'); xline(kin.t_stop_s,'--r');
     subplot(3,1,2); plot(t, kin.v, '-'); grid on; ylabel('v (cm/s)');
     xline(0,'--'); xline(kin.t_stop_s,'--r');
-    subplot(3,1,3); plot(t, kin.a_plus_g, '-'); grid on;
+    % Recomputed from the raw a trace: _kin.mat files written before the
+    % 2026-08 sign correction store the old -a - g in kin.a_plus_g.
+    subplot(3,1,3); plot(t, net_accel(kin, calib), '-'); grid on;
     ylabel('a+g (cm/s^2)'); xlabel('t (s)'); yline(0,':');
     xline(0,'--'); xline(kin.t_stop_s,'--r');
 end

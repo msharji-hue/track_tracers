@@ -27,7 +27,9 @@ function R = fig_kinematics(varargin)
 %       kin.v          smoothed velocity. The local variable inside
 %                      kd_kinematics is v_smooth; it is NOT saved under that
 %                      name, and reading kin.v_smooth returns nothing.
-%       kin.a_plus_g   net acceleration, the pipeline's own field
+%       kin.a           raw per-frame acceleration. a+g is RECOMPUTED from
+%                       this as g - a rather than read from kin.a_plus_g --
+%                       see below.
 %       kin.impact_index, kin.stopFrame
 %   Table columns (trialTag, model, dropHeight_mm, v0_cm_s, isZeroDrop,
 %   kinPath) come from load_kinematics_set.
@@ -35,29 +37,21 @@ function R = fig_kinematics(varargin)
 %   SIGN CONVENTION is pipeline-native and is NOT mirrored to KD 2007: depth
 %   is positive INTO the bed (rod_displacement, signConvention +1).
 %
-%   ROW 3 PLOTS kin.a_plus_g EXACTLY AS THE PIPELINE COMPUTES IT, namely
-%   a_plus_g = -a - g (kd_kinematics step 4). It is deliberately not
-%   recomputed or re-signed here: the pipeline's convention is what every
-%   number in docs/QUANTITIES.md uses, and a figure that quietly adopted a
-%   different one would disagree with all of them.
+%   ROW 3 IS RECOMPUTED, NOT READ. a+g comes from src/net_accel.m as g - a,
+%   derived from the stored raw a trace, rather than from the kin.a_plus_g
+%   column. _kin.mat files written before the 2026-08 sign correction hold the
+%   old -a - g in that column -- the same quantity offset by a constant -2g
+%   with the rest state inverted -- so recomputing makes every already-processed
+%   trial render correctly with no Stage B re-run. The raw a trace was never
+%   affected by the bug.
 %
-%   !! TWO POINTS TO CONFIRM BEFORE PUBLISHING ROW 3 !!
-%   Flagged rather than resolved, because neither can be checked without
-%   running against real data:
+%   In this convention free fall sits at 0, a resting rod at +g, and
+%   deceleration is large and positive, matching KD 2007 Fig. 1.
 %
-%   (a) THERE IS NO FREE-FALL BASELINE TO SEE. kd_kinematics masks a and
-%       a_plus_g to NaN outside [impact_index, stopFrame] (step 7), so row 3
-%       is empty before impact however large PreCapMs is. KD 2007 Fig. 1 shows
-%       a+g flat near zero during the fall; that segment does not exist in this
-%       pipeline's output. Rows 1 and 2 do show the pre-impact context.
-%
-%   (b) FREE FALL WOULD NOT READ ZERO UNDER THIS SIGN. With depth positive into
-%       the bed a free-falling rod has a = +g, so -a - g evaluates to -2g, not
-%       0. Because of (a) that region is never drawn, so nothing in this figure
-%       depends on it. But if row 3 is meant to be read the KD way -- free fall
-%       at zero, resistance positive -- the convention needs checking against
-%       kd_kinematics first. Confirm on a known trial; do not adjust this
-%       script on a guess.
+%   NOTE ON THE PRE-IMPACT SEGMENT. kd_kinematics masks a to NaN outside
+%   [impact_index, stopFrame] (step 7), so row 3 still has no pre-impact
+%   context however large PreCapMs is -- the free-fall baseline KD show is not
+%   in this pipeline's output. Rows 1 and 2 do show it.
 %
 %   TIME WINDOW per trial: every available pre-impact frame up to PreCapMs
 %   before impact, through stopFrame, and nothing after the stop.
@@ -126,8 +120,8 @@ for c = 1:nCol
 end
 
 % ── load the series ──────────────────────────────────────────────────────
-% load_kinematics_set's 'series' option returns only z/v/t, not a_plus_g, so
-% each trial's _kin.mat is read directly here.
+% load_kinematics_set's 'series' option returns only z/v/t, not the raw a that
+% a+g is recomputed from, so each trial's _kin.mat is read directly here.
 nS      = height(sel);
 S       = repmat(struct('t_ms',[], 'z',[], 'v',[], 'ag',[]), nS, 1);
 usable  = false(nS,1);
@@ -172,8 +166,9 @@ for r = 1:3
         inCol = find(sel.model == opt.Models(c)).';
 
         % Zero-drop first so real traces draw over it. Depth and velocity are
-        % flat at zero by protocol; row 3 is left empty, since a_plus_g is
-        % undefined without an impact.
+        % flat at zero by protocol; row 3 is left empty, since a is masked
+        % outside [impact, stop] and that window is degenerate without an
+        % impact.
         if r <= 2 && any(sel.isZeroDrop(inCol))
             yline(ax, 0, '-', 'Color', [0.78 0.78 0.78], 'LineWidth', 1.0);
         end
@@ -310,7 +305,7 @@ function [s, ok] = local_load_series(kinPath, preCapMs)
     end
     if ~isfield(L, 'kin'), return; end
     kin = L.kin;
-    if ~all(isfield(kin, {'t_s','z','v','a_plus_g','stopFrame'})), return; end
+    if ~all(isfield(kin, {'t_s','z','v','a','stopFrame'})), return; end
 
     n   = numel(kin.t_s);
     idx = (1:n).' <= kin.stopFrame & kin.t_s(:) >= -preCapMs/1000;
@@ -319,7 +314,11 @@ function [s, ok] = local_load_series(kinPath, preCapMs)
     s.t_ms = kin.t_s(idx) * 1000;
     s.z    = kin.z(idx);
     s.v    = kin.v(idx);
-    s.ag   = kin.a_plus_g(idx);   % NaN before impact by design; see header (a)
+    % Recomputed as g - a from the raw trace, never read from kin.a_plus_g:
+    % pre-2026-08 files carry the old formula in that column. Still NaN before
+    % impact, since kd_kinematics masks a outside [impact, stop].
+    ag     = net_accel(kin);
+    s.ag   = ag(idx);
     ok = true;
 end
 

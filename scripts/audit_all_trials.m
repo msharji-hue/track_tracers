@@ -146,8 +146,12 @@ function T = audit_all_trials(root, varargin)
             lo  = max(1, kin.impact_index-pad);
             hi  = min(numel(kin.t_s), kin.stopFrame+pad);
             idx = lo:hi;
+            % a+g recomputed from the raw a trace via net_accel, not read from
+            % kin.a_plus_g: files written before the 2026-08 sign correction
+            % carry the old -a - g formula in that column.
+            agAll  = net_accel(kin, calibT);
             SER{k} = struct('tms',(kin.t_s(idx)-kin.t_s(kin.impact_index))*1e3, ...
-                            'z',kin.z(idx),'v',kin.v(idx),'ag',kin.a_plus_g(idx));
+                            'z',kin.z(idx),'v',kin.v(idx),'ag',agAll(idx));
         end
 
         % NEARLIMIT is informational only: 3.7-3.98 cm is physically attainable,

@@ -36,6 +36,8 @@ function kin = kd_kinematics(trackedX, trackedY, calib, dt, varargin)
 %     'postCapMs'     ms after stop retained in z/v                (default calib.postCapMs or 10)
 %
 %   OUTPUT (struct kin)
+%     .a_plus_g   net grain acceleration, g - a (free fall 0, rest +g,
+%                 deceleration large positive). Display quantity only.
 %     .t_s .depthRod_cm .z .v .a .a_plus_g        per-frame series (a masked
 %                                                 outside [impact,stop])
 %     .impact_index .stopFrame
@@ -136,8 +138,24 @@ function kin = kd_kinematics(trackedX, trackedY, calib, dt, varargin)
                            o.accelTolRel, o.accelTolAbs, g);
     end
 
-    % net (resistive) acceleration in the project convention
-    a_plus_g = -a - g;
+    % ── net grain acceleration, the KD "a + g" quantity ──────────────────
+    %   In this pipeline's convention depth is POSITIVE INTO THE BED, so a
+    %   free-falling rod has a = +g. The net acceleration supplied by the grains
+    %   is what remains once gravity is accounted for:
+    %
+    %       a_plus_g = g - a
+    %
+    %   Three checkpoints fix the sign and the offset:
+    %       free fall      a = +g    ->  g - g   = 0            (nothing but gravity)
+    %       at rest        a =  0    ->  g - 0   = +g           (bed carries the weight)
+    %       decelerating   a = -|a|  ->  g + |a| = large +ve    (grains resisting)
+    %
+    %   Corrected 2026-08. The previous formula was -a - g, which is this
+    %   quantity offset by a constant -2g and with the rest state inverted: it
+    %   put free fall at -2g and a resting rod at -g instead of +g. It was
+    %   display-only -- no fit, and none of v0, d_final, t_stop or a_stop, ever
+    %   read it -- so only figures were affected, but they were wrong.
+    a_plus_g = g - a;
 
     % ── 5) DEPTH (measured), zeroed at impact; time re-zeroed at impact ────
     depthRod_cm = z_rod - z_rod(impact_index);
