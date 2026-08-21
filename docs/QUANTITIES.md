@@ -364,10 +364,9 @@ from impact, per foot model.
 
 > Curves are pointwise medians over replicate drops. Zero-drop trials are
 > reserved for scalar measurements and are not shown in the time-history
-> figures. Net acceleration is near zero during free fall (below the plotted
-> range); curves rise from the axis floor to the first resolved post-impact
-> value within the instrument's ~1 ms acceleration resolution. All quantitative
-> fits use unmodified kinematics.
+> figures. Net acceleration is shown over the interval between impact and stop,
+> the range over which the pipeline resolves it. All quantitative fits use
+> unmodified kinematics.
 
 **Display layer.** Every step below affects the drawing only. Nothing is
 written back, and no fit sees any of it:
@@ -375,11 +374,11 @@ written back, and no fit sees any of it:
 | step | applies to |
 |---|---|
 | resample each replicate onto a uniform grid (`GridMs`, default 0.2 ms) relative to impact | all rows |
-| after each trial's OWN detected `t_stop` (`kin.t_stop_s`, never the quarantined table scalar), fill that trial's remaining grid points with its measured **rest state** — `v = 0`, depth = its `d_final`, `a + g = NaN` | depth, v (not `a + g`: the pipeline computes no post-stop acceleration, and none is invented here) |
+| after each trial's OWN detected `t_stop` (`kin.t_stop_s`, never the quarantined table scalar), fill ALL of that trial's remaining grid points — to the end of the grid, not just to its own last sample — with its measured **rest state** — `v = 0`, depth = its `d_final`, `a + g = NaN`. Filling to the grid end is what keeps a trial in the pointwise aggregate for the whole drawn interval; stopping at its last sample leaves NaNs *inside* the region and can void the median mid-curve. Where a recording ends before its detected `t_stop`, rest-fill begins at that last sample instead — an approximation, counted and reported as `nShortRec` under `'Diagnose', true` | depth, v (not `a + g`: the pipeline computes no post-stop acceleration, and none is invented here) |
 | pointwise `Average` across the **full replicate set** (`'median'` default, or `'mean'`) at every grid point | all rows |
 | curve terminates at the height's **median replicate `t_stop`** — the same endpoint in all three panels | all rows |
 | `movmean` per row (`SmoothMs`: depth 1.0 ms, v 2.0 ms, a+g 1.5 ms), applied AFTER aggregation; NaN-aware and edge-shrinking, so the leading edge at impact is neither shifted nor truncated; the pre-smoothing NaN mask is re-applied afterward | each row independently |
-| mask `a + g <= AccelYMin` to NaN, except the single measured sample immediately before the first above-floor sample, which is **clipped** (not masked) to the floor so the rising connector draws | `a + g` only |
+| on the default linear axis, nothing is masked or clipped. Under `'AccelScale','log'` only, mask `a + g <= AccelYMin` to NaN, since a log axis cannot render non-positive values | `a + g` only |
 
 **Why rest-extension replaced "terminate below `MinReplicates`".** Replicates
 stop at different times. Under the old rule, past the earliest stop the
@@ -403,26 +402,30 @@ recorded trace exceeds `IntrusionThreshCm`) is retained behind the same option
 rather than deleted, and is otherwise unchanged: a threshold rule evaluated
 against the unwindowed trace, not a hardcoded tag list.
 
-**Pre-impact `a + g` is computed by this figure, display-only**, from each
-trial's measured velocity by the same local line-fit differentiation
-`kd_kinematics` uses (`'PreImpactAccelMs'` window, default 1.0 ms), clamped to
-never straddle the impact discontinuity. `kd_kinematics` deliberately clamps
-its *stored* `a` to `[impact_index, stopFrame]`; this does not alter that value
-is never written to any `_kin.mat`, and never reaches a fit. During free fall it
-sits near zero — below `AccelYMin` — which is what produces the rising edge.
+**`a + g` is shown over `[impact, stop]` only.** `kd_kinematics` masks its
+stored `a` — and therefore `a + g` — to NaN outside `[impact_index, stopFrame]`,
+and the figure plots exactly that. The figure reconstructs no pre-impact
+acceleration and inserts no synthetic onset point; every plotted sample is a
+measured one, and the row simply begins at impact.
 
-**No synthetic onset point.** Inserting a fixed value (e.g. `1e1`) to force a
-visible rise was considered and rejected. Every plotted sample is measured; the
-sub-resolution part of the rise is represented by the one clipped connector
-point described above, and no fabricated datum appears in the figure.
+**`a + g` (row c) is on a linear y-axis by default.** Over `[impact, stop]` this
+rig's values span roughly `1e3`–`2.2e4` cm/s² — about one decade — where a
+linear axis reads more directly than a log one. (KD 2007 Fig. 1c is logarithmic
+because their 20 µs sampling resolves `1e1`–`1e4`, three decades.) Pass
+`'AccelScale','log'` for the KD-matched log presentation, floored at
+`AccelYMin` (default `1e2` cm/s²). There is no dashed reference line at `g`.
+Depth and v are never clamped; v's y-axis lower limit is fixed at 0.
 
-**`a + g` (row c) is on a log y-axis**, matching KD 2007 Fig. 1c, floored at
-`AccelYMin` (default `1e2` cm/s² — this rig's noise floor; KD used `1e1`). The
-dashed reference line at `g` has been removed. Depth and v are never clamped;
-v's y-axis lower limit is fixed at 0.
+**Axis margins.** Every axis is padded by 5% of its drawn data range, so no
+curve, marker or endpoint sits on the frame. Limits are computed once from the
+pooled drawn data and shared across models within each row.
 
 **Style.** A dashed vertical line at `t = 0` in every panel; a solid thin line
 at `depth = 0` in the depth panel (the bed surface); no other reference lines.
+Axes convention (`hold`/`grid`/`box`) comes from `src/apply_fig_style.m`, shared
+with `scripts/depth_scaling.m` so the two figure families stay matched; change
+the house style there and both follow. Every panel keeps full numeric tick
+labels on both axes and its own x-label.
 
 **Layout.** `'per-model'` (default) writes three figures, one per model, each
 a 3×1 vertical stack sharing the time axis, single-column APS width. `'grid3x3'`

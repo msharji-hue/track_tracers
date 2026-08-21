@@ -23,10 +23,9 @@ function R = fig_kinematics(varargin)
 %       'Average'           'median' (default) | 'mean', across replicates
 %       'SmoothMs'          struct('z',1.0,'v',2.0,'ag',1.5): display movmean
 %                           window per row, ms, applied AFTER aggregation
-%       'AccelYMin'         a+g log-axis floor, cm/s^2 (default 1e2). KD used
-%                           1e1; ours is set by this rig's noise floor.
-%       'PreImpactAccelMs'  window for the display-only pre-impact
-%                           acceleration fit, ms (default 1.0)
+%       'AccelScale'        a+g y-axis: 'linear' (default) | 'log'
+%       'AccelYMin'         a+g LOG-axis floor, cm/s^2 (default 1e2); ignored
+%                           on the linear axis
 %       'ShowZeroDrop'      include zero-drop trials (default FALSE -- they
 %                           are reserved for scalar measurements)
 %       'IntrusionThreshCm' zero-drop depth-range threshold for an individual
@@ -77,12 +76,19 @@ function R = fig_kinematics(varargin)
 %   post-stop acceleration, and inventing a value (0, or g) would be
 %   fabricating data rather than displaying it.
 %
-%   PRE-IMPACT a+g is computed HERE, display-only, from each trial's measured
-%   velocity by the same local line-fit differentiation the pipeline uses
-%   ('PreImpactAccelMs' window). kd_kinematics deliberately clamps its stored
-%   a to [impact, stop]; this does not alter that, is never written to any kin
-%   file, and never reaches a fit. During free fall these values sit near
-%   zero, which is what puts the rising edge on the plot.
+%   a+g IS SHOWN ONLY WHERE THE PIPELINE COMPUTES IT. kd_kinematics masks a to
+%   NaN outside [impact_index, stopFrame], so the a+g panel spans exactly that
+%   interval and pre-impact a+g is NaN. Nothing reconstructs it: the near-
+%   vertical rise at onset and the drop near the stop are the measured data,
+%   rendered as they are.
+%
+%   AXIS CHOICE ('AccelScale', default 'linear'). The plotted a+g spans roughly
+%   1e3-2.2e4 cm/s^2 -- about one decade -- so a linear axis preserves the
+%   two-bump structure and the drop near the stop that a log axis compresses
+%   into near-invisibility. Log axes earn their place across several decades:
+%   KD 2007 spanned 1e1-1e4 at 20 us sampling, which this rig's ~1 ms
+%   acceleration resolution does not reach. 'log' is kept as a one-argument
+%   fallback should a reviewer ask for KD-style axes.
 %
 %   SMOOTHING is a movmean applied AFTER aggregation, window per row
 %   ('SmoothMs'), NaN-aware and edge-shrinking: at the first post-impact
@@ -106,7 +112,7 @@ opt.MinReplicates      = 3;
 opt.Average            = 'median';
 opt.SmoothMs           = struct('z',1.0, 'v',2.0, 'ag',1.5);
 opt.AccelYMin          = 1e2;
-opt.PreImpactAccelMs   = 1.0;
+opt.AccelScale         = 'linear';
 opt.ShowZeroDrop       = false;
 opt.IntrusionThreshCm  = 0.1;
 opt.Layout             = 'per-model';
@@ -131,6 +137,11 @@ opt.Style = lower(char(opt.Style));
 if ~ismember(opt.Style, {'mean','trials'})
     error('fig_kinematics:badStyle', ...
           'Style must be ''mean'' or ''trials'', got "%s".', opt.Style);
+end
+opt.AccelScale = lower(char(opt.AccelScale));
+if ~ismember(opt.AccelScale, {'linear','log'})
+    error('fig_kinematics:badAccelScale', ...
+          'AccelScale must be ''linear'' or ''log'', got "%s".', opt.AccelScale);
 end
 if ~isstruct(opt.SmoothMs) || ~all(isfield(opt.SmoothMs, {'z','v','ag'}))
     error('fig_kinematics:badSmoothMs', ...
@@ -160,8 +171,9 @@ fprintf('  Average           : %s\n', opt.Average);
 fprintf('  SmoothMs          : depth %g ms, v %g ms, a+g %g ms\n', ...
         opt.SmoothMs.z, opt.SmoothMs.v, opt.SmoothMs.ag);
 fprintf('  AccelYMin         : %g cm/s^2 (log-axis floor)\n', opt.AccelYMin);
-fprintf('  PreImpactAccelMs  : %g ms (display-only pre-impact a fit)\n', ...
-        opt.PreImpactAccelMs);
+fprintf('  AccelScale        : %s%s\n', opt.AccelScale, ...
+        local_tern(strcmp(opt.AccelScale,'log'), ...
+                   sprintf(' (floor %g cm/s^2)', opt.AccelYMin), ''));
 fprintf('  ShowZeroDrop      : %s\n', local_tern(opt.ShowZeroDrop,'yes','no'));
 fprintf('  OutDir            : %s\n', opt.OutDir);
 
@@ -294,7 +306,7 @@ end
 % ═════════════════════════════════════════════════════════════════════════
 %  DATA: loading, pre-impact acceleration, gridding
 % ═════════════════════════════════════════════════════════════════════════
-function s = local_load_kin(kinPath, opt)
+function s = local_load_kin(kinPath)
 %LOCAL_LOAD_KIN  One trial's traces, with a+g recomputed and the pre-impact
 %   segment filled in. Returns [] if unreadable or missing a required field.
     s = [];
@@ -316,81 +328,62 @@ function s = local_load_kin(kinPath, opt)
     s.t_ms  = kin.t_s(:) * 1000;
     s.z     = kin.z(:);
     s.v     = kin.v(:);
+    % a+g exists ONLY where the pipeline computes it: kd_kinematics masks a to
+    % NaN outside [impact_index, stopFrame], and this figure shows exactly that
+    % span. Pre-impact a+g is not reconstructed here.
     s.ag    = net_accel(kin, calib);           % g - a; NaN outside [impact,stop]
-
-    % Display-only pre-impact acceleration, from the measured velocity.
-    s.ag = local_fill_preimpact_ag(s.ag, kin, calib, opt.PreImpactAccelMs);
 
     % The SAME stop scalar every analysis uses, and the measured rest depth.
     s.t_stop_ms  = kin.t_stop_s * 1000;
     s.d_final_cm = kin.d_final_cm;
 end
 
-function ag = local_fill_preimpact_ag(ag, kin, calib, windowMs)
-%LOCAL_FILL_PREIMPACT_AG  Pre-impact net acceleration, display-only.
+function [T, shortRec] = local_trial_on_grid(s, grid)
+%LOCAL_TRIAL_ON_GRID  One trial resampled onto the shared grid, rest-filled all
+%   the way to the END OF THE GRID.
 %
-%   kd_kinematics DELIBERATELY clamps its stored a to [impact_index,
-%   stopFrame], and nothing here alters that: this value is computed in the
-%   figure, never written back to any _kin.mat, and never reaches a fit. It
-%   exists so the a+g panel shows the free-fall approach rather than starting
-%   abruptly at the impact peak.
+%   The rest state (v = 0, depth = this trial's d_final) starts at the trial's
+%   REST ONSET and continues to the grid's end -- not merely to the trial's
+%   last recorded sample. That distinction is the whole point: a trial whose
+%   recording ends before the longest t_stop at its height used to contribute
+%   NaN over the remainder, and where enough replicates did that the pointwise
+%   median went NaN too, leaving a visible mid-curve gap (seen at t ~ 55-63 ms
+%   in the lowest-v0 curves). Filling to the grid end makes every trial
+%   contribute everywhere after its own onset, so the median is continuous from
+%   onset to the ensemble endpoint by construction.
 %
-%   Method matches the pipeline's: a local order-1 fit of the measured
-%   velocity against time, over a short symmetric window. During free fall
-%   a ~ +g, so a+g = g - a sits near zero -- below the plotted floor, which is
-%   exactly where the rising edge comes from.
+%   REST ONSET is min(t_stop, last recorded sample). Normally that is t_stop.
+%   When a recording ends first, treating the trial as at rest from that point
+%   is an APPROXIMATION -- the trial may still have been moving -- so those
+%   trials are counted and reported by Diagnose rather than passing silently.
 %
-%   The fit window is clamped to end at impact_index-1 so it NEVER straddles
-%   the impact discontinuity. Letting it reach across would smear the impact
-%   spike backwards and manufacture an onset that the data does not show.
-
-    g = 980;
-    if isstruct(calib) && isfield(calib, 'g_cm_s2'), g = calib.g_cm_s2; end
-
-    t_s = kin.t_s(:);
-    v   = kin.v(:);
-    imp = kin.impact_index;
-    if ~isfinite(imp) || imp < 2, return; end
-
-    dt_ms = median(diff(t_s), 'omitnan') * 1000;
-    if ~(dt_ms > 0) || ~isfinite(dt_ms), return; end
-    half = max(1, round((windowMs/2) / dt_ms));
-
-    lastPre = min(imp - 1, numel(t_s));
-    for i = 1:lastPre
-        lo = max(1, i - half);
-        hi = min(lastPre, i + half);        % never crosses into the impact
-        xx = t_s(lo:hi);  yy = v(lo:hi);
-        ok = isfinite(xx) & isfinite(yy);
-        if nnz(ok) < 3, continue; end
-        p = polyfit(xx(ok), yy(ok), 1);     % slope = a, cm/s^2 (t in seconds)
-        ag(i) = g - p(1);
-    end
-end
-
-function T = local_trial_on_grid(s, grid)
-%LOCAL_TRIAL_ON_GRID  One trial resampled onto the shared grid, with its own
-%   measured REST STATE filling every grid point after its detected t_stop.
-%
-%   Before/at t_stop: the measured traces, linearly interpolated, NaN outside
-%   the trial's own recorded span. After t_stop: v = 0 and depth = d_final,
-%   both measured facts about that trial. a+g stays NaN -- the pipeline does
-%   not compute post-stop acceleration and this figure will not invent it.
+%   a+g is never rest-filled: kd_kinematics computes no post-stop acceleration
+%   and this figure will not invent one.
 
     T = struct('z',  nan(size(grid)), ...
                'v',  nan(size(grid)), ...
                'ag', nan(size(grid)));
 
-    pre  = grid <= s.t_stop_ms;
-    post = ~pre;
+    finiteMeas = isfinite(s.t_ms) & (isfinite(s.z) | isfinite(s.v));
+    if ~any(finiteMeas)
+        shortRec = false;
+        return
+    end
+    tLastMeas = max(s.t_ms(finiteMeas));
 
-    T.z(pre)  = local_interp(s.t_ms, s.z,  grid(pre));
-    T.v(pre)  = local_interp(s.t_ms, s.v,  grid(pre));
-    T.ag(pre) = local_interp(s.t_ms, s.ag, grid(pre));
+    restOnset = min(s.t_stop_ms, tLastMeas);
+    shortRec  = tLastMeas < s.t_stop_ms;
 
-    T.z(post)  = s.d_final_cm;
-    T.v(post)  = 0;
-    T.ag(post) = NaN;
+    meas = grid <= restOnset;
+    rest = ~meas;
+
+    T.z(meas)  = local_interp(s.t_ms, s.z,  grid(meas));
+    T.v(meas)  = local_interp(s.t_ms, s.v,  grid(meas));
+    T.ag(meas) = local_interp(s.t_ms, s.ag, grid(meas));
+
+    T.z(rest)  = s.d_final_cm;
+    T.v(rest)  = 0;
+    T.ag(rest) = NaN;
 end
 
 function y = local_interp(t, x, q)
@@ -415,7 +408,7 @@ function [C, O] = local_build_ensembles(K, opt)
 
         loaded = cell(numel(rows),1);
         for j = 1:numel(rows)
-            loaded{j} = local_load_kin(K.kinPath(rows(j)), opt);
+            loaded{j} = local_load_kin(K.kinPath(rows(j)));
         end
         okLoad = ~cellfun(@isempty, loaded);
         % A trial with no finite t_stop cannot be rest-extended -- the whole
@@ -441,9 +434,11 @@ function [C, O] = local_build_ensembles(K, opt)
         Z  = nan(numel(grid), nT);
         V  = nan(numel(grid), nT);
         A  = nan(numel(grid), nT);
+        nShortRec = 0;
         for j = 1:nT
-            Tj = local_trial_on_grid(loaded{j}, grid);
+            [Tj, shortRec] = local_trial_on_grid(loaded{j}, grid);
             Z(:,j) = Tj.z;  V(:,j) = Tj.v;  A(:,j) = Tj.ag;
+            nShortRec = nShortRec + shortRec;
         end
 
         [zRaw, nz] = local_aggregate(Z, opt.Average);
@@ -485,6 +480,8 @@ function [C, O] = local_build_ensembles(K, opt)
             'supportAtEnd', supportAtEnd, ...
             'supportMeasAtEnd', supportMeasAtEnd, ...
             'oldRuleEndMs', oldEndMs, ...
+            'nShortRec',    nShortRec, ...
+            'interiorNaN',  local_interior_nan(zC, vC, aC), ...
             'agRaw',        aRaw, ...
             't_ms', grid, 'z', zC, 'v', vC, 'ag', aC);   %#ok<AGROW>
 
@@ -494,7 +491,7 @@ function [C, O] = local_build_ensembles(K, opt)
                 sFull = loaded{j};
                 depthRange = max(sFull.z, [], 'omitnan') - min(sFull.z, [], 'omitnan');
                 if ~(depthRange > opt.IntrusionThreshCm), continue; end
-                Tj = local_trial_on_grid(sFull, grid);
+                Tj = local_trial_on_grid(sFull, grid);   %#ok<ASGLU>
                 zO = local_smooth_row(Tj.z, opt.GridMs, opt.SmoothMs.z, medStopMs, 'depth (overlay)');
                 vO = local_smooth_row(Tj.v, opt.GridMs, opt.SmoothMs.v, medStopMs, 'v (overlay)');
                 zO(past) = NaN;  vO(past) = NaN;
@@ -513,7 +510,7 @@ function C = local_build_trials(K, opt)
 %   recorded, ending at its own stop.
     C = local_empty_curve();
     for i = 1:height(K)
-        s = local_load_kin(K.kinPath(i), opt);
+        s = local_load_kin(K.kinPath(i));
         if isempty(s), continue; end
 
         idx = s.t_ms >= -opt.PreCapMs & s.t_ms <= s.t_stop_ms;
@@ -536,6 +533,8 @@ function C = local_build_trials(K, opt)
             'supportAtEnd', 1, ...
             'supportMeasAtEnd', 1, ...
             'oldRuleEndMs', NaN, ...
+            'nShortRec',    0, ...
+            'interiorNaN',  local_interior_nan(zC, vC, aC), ...
             'agRaw',        s.ag(idx), ...
             't_ms', t, 'z', zC, 'v', vC, 'ag', aC);
     end
@@ -545,7 +544,7 @@ function C = local_empty_curve()
     C = struct('model',{}, 'height',{}, 'medV0',{}, 'isZeroDrop',{}, ...
                'nMax',{}, 'medStopMs',{}, 'tStopMinMs',{}, 'tStopMaxMs',{}, ...
                'supportAtEnd',{}, 'supportMeasAtEnd',{}, 'oldRuleEndMs',{}, ...
-               'agRaw',{}, ...
+               'nShortRec',{}, 'interiorNaN',{}, 'agRaw',{}, ...
                't_ms',{}, 'z',{}, 'v',{}, 'ag',{});
 end
 
@@ -568,6 +567,33 @@ function [m, n] = local_aggregate(Y, avg)
         m = mean(Y, 2, 'omitnan');
     end
     m(n == 0) = NaN;
+end
+
+function counts = local_interior_nan(zC, vC, aC)
+%LOCAL_INTERIOR_NAN  NaNs strictly between a curve's first and last finite
+%   sample, per row, returned as [z v ag].
+%
+%   Under the rest-extension every ensemble curve must be continuous from its
+%   onset to the ensemble endpoint, so a nonzero count is a defect rather than
+%   a property of the data -- Diagnose asserts on it.
+%
+%   a+g is counted the same way but spans only [impact, stop] by construction;
+%   its "onset" is its first computed sample, not the start of the grid.
+%
+%   Returned as a numeric triple rather than a struct: struct() field values
+%   that are themselves structs are a needless hazard inside the struct(...)
+%   calls that build C.
+    counts = [local_count_interior(zC), ...
+              local_count_interior(vC), ...
+              local_count_interior(aC)];
+end
+
+function n = local_count_interior(y)
+    n = 0;
+    f = find(isfinite(y), 1, 'first');
+    l = find(isfinite(y), 1, 'last');
+    if isempty(f) || l <= f, return; end
+    n = sum(~isfinite(y(f:l)));
 end
 
 function tEnd = local_old_rule_end(n, grid, minRep)
@@ -650,6 +676,29 @@ function local_diagnose(C, opt)
                  'before their own stop. old-rule end\n      = where the ' ...
                  'retired MinReplicates rule would have truncated the curve.\n']);
 
+        % Continuity: after rest-filling to the grid end, every ensemble curve
+        % must be gap-free from its onset to the endpoint. A nonzero count is
+        % the mid-curve break this fill was introduced to remove.
+        bad = false;
+        for q = sel
+            c = C(q).interiorNaN;
+            if any(c > 0)
+                bad = true;
+                fprintf(['    CONTINUITY FAIL h = %g mm: interior NaNs ' ...
+                         'z=%d v=%d a+g=%d\n'], C(q).height, c(1), c(2), c(3));
+            end
+        end
+        if ~bad
+            fprintf('    continuity: OK -- no interior NaNs in any curve (z, v, a+g)\n');
+        end
+
+        nShort = sum([C(sel).nShortRec]);
+        if nShort > 0
+            fprintf(['    NOTE: %d trial(s) had recordings ending before their ' ...
+                     'own t_stop and were\n          treated as at rest from ' ...
+                     'the last recorded sample -- an approximation.\n'], nShort);
+        end
+
         % One representative mid-height: the a+g onset, before vs after the
         % display smooth. If smoothing were shifting the onset, the first
         % non-NaN sample would move between these two rows.
@@ -684,32 +733,57 @@ end
 % ═════════════════════════════════════════════════════════════════════════
 function LIMS = local_shared_limits(C, O, opt)
 %LOCAL_SHARED_LIMITS  One set of x/y limits per row, shared across every model
-%   and every figure, so the panels stay comparable.
+%   and every figure, so the three geometry figures are directly comparable.
+%
+%   Every axis carries a 5% margin beyond the data extent, so no curve or stop
+%   marker sits on a panel edge. The depth panel needs this most: its markers
+%   sit exactly at each curve's maximum and were being clipped by the frame.
+%
+%   The x-limit runs from -PreCapMs to the LATEST ensemble endpoint across all
+%   geometries -- the last point actually drawn, not the end of the internal
+%   grid, which extends past every curve's termination to the longest replicate
+%   stop and would leave a wide empty margin on the right.
 
-    allT = vertcat(C.t_ms);
-    if ~isempty(O), allT = [allT; vertcat(O.t_ms)]; end
-    XL = [min(allT), max(allT)];
+    MARGIN = 0.05;
+
+    lastDrawn = -inf;
+    for k = 1:numel(C)
+        idx = find(isfinite(C(k).z) | isfinite(C(k).v) | isfinite(C(k).ag), 1, 'last');
+        if ~isempty(idx), lastDrawn = max(lastDrawn, C(k).t_ms(idx)); end
+    end
+    for k = 1:numel(O)
+        idx = find(isfinite(O(k).z) | isfinite(O(k).v), 1, 'last');
+        if ~isempty(idx), lastDrawn = max(lastDrawn, O(k).t_ms(idx)); end
+    end
+    if ~isfinite(lastDrawn), lastDrawn = 0; end
+
+    tLo = -opt.PreCapMs;
+    XL  = [tLo, lastDrawn + MARGIN*(lastDrawn - tLo)];
 
     zAll = vertcat(C.z);
     if ~isempty(O), zAll = [zAll; vertcat(O.z)]; end
-    YL_z = local_pad_ylim(zAll);
+    YL_z = local_pad_ylim(zAll, MARGIN);
 
     vAll = vertcat(C.v);
     if ~isempty(O), vAll = [vAll; vertcat(O.v)]; end
-    YL_v = local_pad_ylim(vAll);
+    YL_v = local_pad_ylim(vAll, MARGIN);
     YL_v(1) = 0;                 % velocity floor is zero: nothing below rest
 
-    YL_ag = local_log_ylim(vertcat(C.ag), opt.AccelYMin);
+    agAll = vertcat(C.ag);
+    YL_ag_lin = local_pad_ylim(agAll, MARGIN);
+    YL_ag_lin(1) = 0;            % a+g is a magnitude here; the axis starts at 0
+    YL_ag_log = local_log_ylim(agAll, opt.AccelYMin);
 
-    LIMS = struct('t', XL, 'z', YL_z, 'v', YL_v, 'ag_log', YL_ag);
+    LIMS = struct('t', XL, 'z', YL_z, 'v', YL_v, ...
+                  'ag_lin', YL_ag_lin, 'ag_log', YL_ag_log);
 end
 
-function yl = local_pad_ylim(vals)
+function yl = local_pad_ylim(vals, margin)
     vals = vals(isfinite(vals));
     if isempty(vals), yl = [-1 1]; return; end
     lo = min(vals); hi = max(vals); r = hi - lo;
     if r == 0, r = max(abs(hi), 1); end
-    yl = [lo - 0.05*r, hi + 0.05*r];
+    yl = [lo - margin*r, hi + margin*r];
 end
 
 function yl = local_log_ylim(vals, floorVal)
@@ -743,7 +817,11 @@ end
 %  DRAWING
 % ═════════════════════════════════════════════════════════════════════════
 function fig = local_draw_one_model(model, C, O, CLIM, CMAP, LIMS, opt)
-    fig = figure('Color','w','Units','inches','Position',[1 1 3.4 7.0], ...
+%LOCAL_DRAW_ONE_MODEL  Three stacked panels on a square canvas.
+%   Every panel keeps full numeric tick labels on BOTH axes -- the x labels are
+%   not blanked on the upper two. Repeating them costs a little space and
+%   removes any doubt about which panel a reader is looking at.
+    fig = figure('Color','w','Units','inches','Position',[1 1 7.0 7.0], ...
                  'Visible', local_tern(opt.Show,'on','off'));
     tl = tiledlayout(fig, 3, 1, 'Padding','compact', 'TileSpacing','compact');
 
@@ -751,8 +829,13 @@ function fig = local_draw_one_model(model, C, O, CLIM, CMAP, LIMS, opt)
     ax2 = nexttile(tl); local_draw_panel(ax2, 'v',  model, C, O, CLIM, CMAP, LIMS, opt);
     ax3 = nexttile(tl); local_draw_panel(ax3, 'ag', model, C, O, CLIM, CMAP, LIMS, opt);
 
-    xlabel(ax3, 't - t_impact (ms)', 'FontSize', 8, 'Interpreter', 'none');
-    set([ax1 ax2], 'XTickLabel', []);
+    % The geometry is named on the figure, not only in the filename: these are
+    % three separate files and a reader should not have to check the path.
+    title(ax1, model, 'Interpreter', 'none');
+
+    xlabel(ax1, 't - t_impact (ms)', 'Interpreter', 'none');
+    xlabel(ax2, 't - t_impact (ms)', 'Interpreter', 'none');
+    xlabel(ax3, 't - t_impact (ms)', 'Interpreter', 'none');
 end
 
 function fig = local_draw_grid3x3(models, C, O, CLIM, CMAP, LIMS, opt)
@@ -766,10 +849,13 @@ function fig = local_draw_grid3x3(models, C, O, CLIM, CMAP, LIMS, opt)
         for c = 1:nCol
             ax = nexttile(tl, (r-1)*nCol + c);
             local_draw_panel(ax, ROWS{r}, models(c), C, O, CLIM, CMAP, LIMS, opt);
-            if r < 3, set(ax, 'XTickLabel', []); end
-            if c > 1, set(ax, 'YTickLabel', []); end
-            if r == 3 && c == 1
-                xlabel(ax, 't - t_impact (ms)', 'FontSize', 8, 'Interpreter', 'none');
+            % Full numeric tick labels on both axes of every panel: nothing is
+            % blanked, even where a row or column repeats them.
+            if r == 3
+                xlabel(ax, 't - t_impact (ms)', 'Interpreter', 'none');
+            end
+            if r == 1
+                title(ax, models(c), 'Interpreter', 'none');
             end
         end
     end
@@ -779,7 +865,9 @@ function local_draw_panel(ax, rowKey, model, C, O, CLIM, CMAP, LIMS, opt)
 %LOCAL_DRAW_PANEL  One (row, model) panel -- shared by both layouts and both
 %   styles, since C/O are already in a common shape.
 
-    hold(ax, 'on');
+    % House style shared with depth_scaling.m (grid on, box on, MATLAB default
+    % ticks and fonts) -- see src/apply_fig_style.m.
+    apply_fig_style(ax);
 
     % Drawn FIRST so they sit behind the data.
     xline(ax, 0, '--', 'Color', [0.82 0.82 0.82], 'LineWidth', 0.75, ...
@@ -798,12 +886,14 @@ function local_draw_panel(ax, rowKey, model, C, O, CLIM, CMAP, LIMS, opt)
     for k = inCol
         y = C(k).(rowKey);
         if isempty(y) || all(isnan(y)), continue; end
-        if strcmp(rowKey, 'ag')
-            y = local_prep_log(y, opt.AccelYMin);
+        if strcmp(rowKey, 'ag') && strcmp(opt.AccelScale, 'log')
+            % A log axis cannot render non-positive values; mask them so the
+            % line breaks rather than silently vanishing.
+            y(y <= 0) = NaN;
             if all(isnan(y)), continue; end
         end
         col = local_v0_color(C(k).medV0, CLIM, CMAP);
-        plot(ax, C(k).t_ms, y, '-', 'LineWidth', 1.5, 'Color', col);
+        plot(ax, C(k).t_ms, y, '-', 'LineWidth', 2.0, 'Color', col);
 
         if strcmp(rowKey, 'z')
             % Stop marker at the unified endpoint: the height's median t_stop.
@@ -811,7 +901,7 @@ function local_draw_panel(ax, rowKey, model, C, O, CLIM, CMAP, LIMS, opt)
             if ~isempty(last)
                 mk = 'd';
                 if isKey(mkMap, char(model)), mk = mkMap(char(model)); end
-                plot(ax, C(k).t_ms(last), y(last), mk, 'MarkerSize', 5, ...
+                plot(ax, C(k).t_ms(last), y(last), mk, 'MarkerSize', 7, ...
                      'MarkerFaceColor', col, 'MarkerEdgeColor', [0.15 0.15 0.15], ...
                      'LineWidth', 0.5);
             end
@@ -829,53 +919,22 @@ function local_draw_panel(ax, rowKey, model, C, O, CLIM, CMAP, LIMS, opt)
 
     switch rowKey
         case 'ag'
-            set(ax, 'YScale', 'log');
-            ylim(ax, LIMS.ag_log);
-            ylabel(ax, 'a + g (cm/s^2)', 'FontSize', 8, 'Interpreter', 'none');
+            if strcmp(opt.AccelScale, 'log')
+                set(ax, 'YScale', 'log');
+                ylim(ax, LIMS.ag_log);
+            else
+                set(ax, 'YScale', 'linear');
+                ylim(ax, LIMS.ag_lin);   % 0 to data max + 5%; MATLAB adds the
+            end                          % x10^4 multiplier on the tick labels
+            ylabel(ax, 'a + g (cm/s^2)', 'Interpreter', 'none');
         case 'v'
             ylim(ax, LIMS.v);
-            ylabel(ax, 'v (cm/s)', 'FontSize', 8, 'Interpreter', 'none');
+            ylabel(ax, 'v (cm/s)', 'Interpreter', 'none');
         otherwise
             ylim(ax, LIMS.z);
-            ylabel(ax, 'depth (cm)', 'FontSize', 8, 'Interpreter', 'none');
+            ylabel(ax, 'depth (cm)', 'Interpreter', 'none');
     end
     xlim(ax, LIMS.t);
-
-    box(ax, 'on');
-    grid(ax, 'on');
-    set(ax, 'XMinorGrid', 'off', 'YMinorGrid', 'off', ...
-            'FontSize', 8, 'LineWidth', 0.5, 'Layer', 'top');
-end
-
-function yPlot = local_prep_log(y, floorVal)
-%LOCAL_PREP_LOG  Prepare a curve for the log axis.
-%
-%   Sub-floor samples are masked to NaN so they do not crawl along the bottom
-%   of the panel -- EXCEPT the single sample immediately before the first
-%   above-floor sample, which is CLIPPED to the floor instead of masked. That
-%   one retained point is what lets MATLAB draw the rising connector from the
-%   axis floor up into the first resolved value: without it the curve would
-%   begin abruptly at the peak, and with a NaN there the connector would be
-%   broken.
-%
-%   Pre-impact samples are near zero (free fall), so they sit below the floor
-%   and this transition is exactly the impact onset.
-%
-%   CONSIDERED AND REJECTED: inserting a synthetic onset point at a fixed
-%   value (e.g. 1e1) to force a visible rise. Every plotted sample here is
-%   measured; the sub-resolution part of the rise is represented by the
-%   clipped connector, and no fabricated datum appears in the figure.
-
-    yPlot = y;
-    sub   = ~isfinite(y) | y <= floorVal;
-    first = find(~sub, 1, 'first');
-    yPlot(sub) = NaN;
-    if ~isempty(first) && first > 1
-        prev = first - 1;
-        if isfinite(y(prev))       % a measured sample that sits below the floor
-            yPlot(prev) = floorVal;
-        end
-    end
 end
 
 % ═════════════════════════════════════════════════════════════════════════
