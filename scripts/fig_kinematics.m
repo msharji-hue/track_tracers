@@ -72,15 +72,26 @@ function R = fig_kinematics(varargin)
 %   endpoint by construction of the median -- about half the replicates are
 %   already at rest there -- rather than by being forced to zero.
 %
-%   a+g is deliberately NOT rest-extended. The pipeline does not compute
-%   post-stop acceleration, and inventing a value (0, or g) would be
-%   fabricating data rather than displaying it.
+%   a+g is deliberately NOT rest-extended across the grid. The pipeline does
+%   not compute post-stop acceleration, and filling a value forward would be
+%   fabricating a trace rather than displaying one.
 %
 %   a+g IS SHOWN ONLY WHERE THE PIPELINE COMPUTES IT. kd_kinematics masks a to
 %   NaN outside [impact_index, stopFrame], so the a+g panel spans exactly that
 %   interval and pre-impact a+g is NaN. Nothing reconstructs it: the near-
 %   vertical rise at onset and the drop near the stop are the measured data,
 %   rendered as they are.
+%
+%   TERMINAL REST SEGMENT. The a+g curve ends with one segment from its last
+%   computed value down to a + g = g at the unified stop. At rest the bed
+%   carries the rod's weight, so a = 0 and a + g = g exactly -- a measured
+%   state, not an extrapolation, and the one point after the stop that is
+%   known rather than guessed. The drop across that segment is the per-height
+%   acceleration discontinuity: how much net upward acceleration the grains
+%   were still supplying when the rod stopped. It ends at the SAME t as the
+%   depth and velocity curves (one stop per height per geometry, shared by
+%   that figure's three panels) and nothing is drawn past it. 'Diagnose'
+%   asserts the three endpoints are identical.
 %
 %   AXIS CHOICE ('AccelScale', default 'linear'). The plotted a+g spans roughly
 %   1e3-2.2e4 cm/s^2 -- about one decade -- so a linear axis preserves the
@@ -91,11 +102,28 @@ function R = fig_kinematics(varargin)
 %   fallback should a reviewer ask for KD-style axes.
 %
 %   SMOOTHING is a movmean applied AFTER aggregation, window per row
-%   ('SmoothMs'), NaN-aware and edge-shrinking: at the first post-impact
-%   sample the window uses only the samples that exist, so the leading edge is
-%   neither shifted nor truncated. The pre-smoothing NaN mask is re-applied
+%   ('SmoothMs'), NaN-aware. The pre-smoothing NaN mask is re-applied
 %   afterwards, which is also what stops a line drawing a connector to the
 %   axis at a curve's start or end.
+%
+%   The a+g row is smoothed EDGE-PRESERVING; depth and velocity are not, and
+%   do not need to be. movmean's 'shrink' rule truncates the window at a
+%   boundary but still averages about half a window there. Depth and velocity
+%   begin PreCapMs before impact, where the curve is flat, so that costs
+%   nothing. a+g begins AT impact, on the steepest millisecond of the trace,
+%   where it cost everything: at the impact sample v is maximal, so a is ~0
+%   and a+g is ~g, and averaging that measured onset together with the rise
+%   above it reported the mid-rise value (0.3-1.6e4) as the starting point
+%   instead of ~0.1e4. Edge preservation sets the window's half-width to the
+%   distance from the edge of the finite support, so the first and last
+%   samples are returned unchanged and the window stays symmetric -- nothing
+%   is phase-shifted. 'Diagnose' asserts the first sample is untouched.
+%
+%   COLOUR is one global v0 scale over every retained height of every model,
+%   so the same physical v0 is the same colour in Default, Tight and Wide.
+%   Zero-drop curves are excluded from the range: their v0 is 0 by quarantine
+%   rather than by measurement, and including it would anchor the scale at
+%   zero. The range is printed in the run summary.
 %
 %   ZERO-DROP TRIALS are excluded by default: they are reserved for scalar
 %   measurements and are not shown in these time histories. 'ShowZeroDrop'
@@ -242,19 +270,38 @@ if ~opt.ShowZeroDrop && nZeroDropAvail > 0
             nZeroDropAvail);
 end
 fprintf(['\n  display layer: pointwise %ss over replicates with post-stop rest\n' ...
-         '  extension; movmean smoothing per row; a+g on log axis with values\n' ...
-         '  <= AccelYMin masked; quantitative fits use unmodified pipeline\n' ...
-         '  kinematics.\n'], opt.Average);
+         '  extension; movmean smoothing per row, edge-preserving on a+g so the\n' ...
+         '  measured onset at impact is not averaged upward; a+g on a %s axis,\n' ...
+         '  ending in the measured rest state (a = 0, so a+g = g) at the same\n' ...
+         '  unified stop as depth and v; quantitative fits use unmodified\n' ...
+         '  pipeline kinematics.\n'], opt.Average, opt.AccelScale);
 
 if opt.Diagnose
     local_diagnose(C, opt);
 end
 
-% ── shared colour scale: median v0 over the plotted (nonzero) heights ────
-allV0 = [C.medV0];
+% ── shared colour scale: ONE global v0 range over every geometry ─────────
+% Computed once, here, from every retained height of every model, and handed
+% unchanged to each figure. The same physical v0 therefore gets the same colour
+% in Default, Tight and Wide, and the three figures can be read against each
+% other -- which is the whole point of drawing them separately.
+%
+% Zero-drop curves are excluded from the RANGE even when they are drawn. Their
+% v0 is 0 by quarantine, not by measurement (load_kinematics_set sets it: no
+% fall, so no impact speed), so including it would anchor the scale at zero and
+% compress every real curve into the top of the colormap.
+isZD  = [C.isZeroDrop];
+allV0 = [C(~isZD).medV0];
+if isempty(allV0), allV0 = [C.medV0]; end     % zero-drop only: nothing else to scale by
+allV0 = allV0(isfinite(allV0));
+if isempty(allV0), allV0 = 0; end
 CLIM  = [min(allV0), max(allV0)];
 if ~(diff(CLIM) > 0), CLIM = CLIM(1) + [0, max(1, abs(CLIM(1)))]; end
 CMAP  = local_colormap(256);
+fprintf(['  shared v0 colour scale : %.1f - %.1f cm/s over %d retained ' ...
+         'height curve(s),\n                          all geometries ' ...
+         '(same v0 -> same colour in every figure)\n'], ...
+        CLIM(1), CLIM(2), numel(allV0));
 
 % ── shared axis limits, computed once across every model and row ─────────
 LIMS = local_shared_limits(C, O, opt);
@@ -331,7 +378,10 @@ function s = local_load_kin(kinPath)
     % a+g exists ONLY where the pipeline computes it: kd_kinematics masks a to
     % NaN outside [impact_index, stopFrame], and this figure shows exactly that
     % span. Pre-impact a+g is not reconstructed here.
-    s.ag    = net_accel(kin, calib);           % g - a; NaN outside [impact,stop]
+    % g comes back from net_accel rather than being re-derived from calib, so
+    % the rest state drawn at a + g = g cannot drift from the value the trace
+    % itself was computed with.
+    [s.ag, s.g_cm_s2] = net_accel(kin, calib);  % g - a; NaN outside [impact,stop]
 
     % The SAME stop scalar every analysis uses, and the measured rest depth.
     s.t_stop_ms  = kin.t_stop_s * 1000;
@@ -455,11 +505,25 @@ function [C, O] = local_build_ensembles(K, opt)
 
         zC = local_smooth_row(zRaw, opt.GridMs, opt.SmoothMs.z,  medStopMs, 'depth');
         vC = local_smooth_row(vRaw, opt.GridMs, opt.SmoothMs.v,  medStopMs, 'v');
-        aC = local_smooth_row(aRaw, opt.GridMs, opt.SmoothMs.ag, medStopMs, 'a+g');
+        % edgePreserve for a+g only: its support starts AT impact, on the
+        % steepest millisecond of the trace, where a shrunk movmean window
+        % still averages the measured onset up into the rise.
+        aC = local_smooth_row(aRaw, opt.GridMs, opt.SmoothMs.ag, medStopMs, 'a+g', [], true);
 
         % Unified endpoint: every panel ends at this height's median t_stop.
         past = grid > medStopMs;
         zC(past) = NaN;  vC(past) = NaN;  aC(past) = NaN;
+
+        % THE shared endpoint in t, for all three panels of this height: the
+        % last grid point at or before the median stop. Taken once, here, so
+        % the a+g terminal segment cannot end anywhere else.
+        tEndMs = max(grid(~past));
+
+        % g used for the rest state is the one net_accel used per trial; they
+        % are the same constant across a height in practice, and taking the
+        % median rather than the first makes a stray calib harmless.
+        gRest = median(cellfun(@(s) s.g_cm_s2, loaded));
+        [agTermT, agTermY] = local_ag_terminal(grid, aC, tEndMs, gRest);
 
         % At the endpoint every replicate contributes (rest-extended), while
         % only about half are still in their measured phase -- which is exactly
@@ -483,6 +547,9 @@ function [C, O] = local_build_ensembles(K, opt)
             'nShortRec',    nShortRec, ...
             'interiorNaN',  local_interior_nan(zC, vC, aC), ...
             'agRaw',        aRaw, ...
+            'tEndMs',       tEndMs, ...
+            'agTermT',      agTermT, ...
+            'agTermY',      agTermY, ...
             't_ms', grid, 'z', zC, 'v', vC, 'ag', aC);   %#ok<AGROW>
 
         % ── individual zero-drop overlays (only when explicitly enabled) ──
@@ -519,7 +586,13 @@ function C = local_build_trials(K, opt)
 
         zC = local_smooth_row(s.z(idx),  [], opt.SmoothMs.z,  s.t_stop_ms, 'depth', t);
         vC = local_smooth_row(s.v(idx),  [], opt.SmoothMs.v,  s.t_stop_ms, 'v',     t);
-        aC = local_smooth_row(s.ag(idx), [], opt.SmoothMs.ag, s.t_stop_ms, 'a+g',   t);
+        aC = local_smooth_row(s.ag(idx), [], opt.SmoothMs.ag, s.t_stop_ms, 'a+g',   t, true);
+
+        % This view's endpoint is the trial's OWN last drawn sample, since it
+        % ends at its own stop rather than at an ensemble one. Same terminal
+        % rest segment, same rule.
+        tEndMs = t(end);
+        [agTermT, agTermY] = local_ag_terminal(t, aC, tEndMs, s.g_cm_s2);
 
         C(end+1) = struct( ...                                    %#ok<AGROW>
             'model',        K.model(i), ...
@@ -536,8 +609,42 @@ function C = local_build_trials(K, opt)
             'nShortRec',    0, ...
             'interiorNaN',  local_interior_nan(zC, vC, aC), ...
             'agRaw',        s.ag(idx), ...
+            'tEndMs',       tEndMs, ...
+            'agTermT',      agTermT, ...
+            'agTermY',      agTermY, ...
             't_ms', t, 'z', zC, 'v', vC, 'ag', aC);
     end
+end
+
+function [tSeg, ySeg] = local_ag_terminal(tAxis, ag, tEndMs, g)
+%LOCAL_AG_TERMINAL  The measured rest state, as one final a+g segment.
+%
+%   At rest the bed carries the rod's weight: a = 0, so a + g = g exactly.
+%   That is a MEASURED state, not an extrapolation and not a fabricated datum.
+%   The pipeline simply computes no acceleration past stopFrame -- kd_kinematics
+%   masks a outside [impact_index, stopFrame] -- which is why the aggregate has
+%   nothing there to plot, and why without this segment the a+g curve just stops
+%   in mid-air at whatever value it last held.
+%
+%   The segment runs from the last computed a+g value to g at tEndMs. The
+%   visible drop across it is the per-height acceleration discontinuity: how
+%   much net upward acceleration the grains were still supplying at the instant
+%   the rod stopped. That the rod stops while a + g is still far above g is a
+%   real feature of these traces, not a plotting artefact.
+%
+%   tEndMs is the caller's UNIFIED endpoint -- the same t at which that
+%   height's depth and velocity curves end. The segment therefore terminates
+%   exactly where the other two panels do, and nothing is drawn past it. When
+%   the last computed sample already sits at tEndMs the segment is vertical,
+%   which is the sharp terminal drop; when the a+g row happens to run out
+%   earlier it slopes down to the same endpoint instead.
+    tSeg = [];  ySeg = [];
+    if ~isfinite(tEndMs) || ~isfinite(g), return; end
+    i = find(isfinite(ag), 1, 'last');
+    if isempty(i), return; end
+    if tAxis(i) > tEndMs, return; end        % nothing to append past the stop
+    tSeg = [tAxis(i); tEndMs];
+    ySeg = [ag(i);    g];
 end
 
 function C = local_empty_curve()
@@ -545,6 +652,7 @@ function C = local_empty_curve()
                'nMax',{}, 'medStopMs',{}, 'tStopMinMs',{}, 'tStopMaxMs',{}, ...
                'supportAtEnd',{}, 'supportMeasAtEnd',{}, 'oldRuleEndMs',{}, ...
                'nShortRec',{}, 'interiorNaN',{}, 'agRaw',{}, ...
+               'tEndMs',{}, 'agTermT',{}, 'agTermY',{}, ...
                't_ms',{}, 'z',{}, 'v',{}, 'ag',{});
 end
 
@@ -614,15 +722,29 @@ function sAt = local_support_at(n, grid, tMs)
     sAt = n(i);
 end
 
-function y = local_smooth_row(yRaw, gridMs, windowMs, medianStopMs, rowLabel, tMs)
+function y = local_smooth_row(yRaw, gridMs, windowMs, medianStopMs, rowLabel, tMs, edgePreserve)
 %LOCAL_SMOOTH_ROW  movmean AFTER aggregation, then re-mask to the original
 %   support so smoothing cannot extend a curve past where the data ends.
 %
-%   movmean's default 'shrink' endpoint rule plus 'omitnan' is exactly what is
-%   wanted at the impact edge: the window at the first post-impact sample
-%   spans only the samples that exist, so the leading edge is neither shifted
-%   later nor truncated. Re-applying the input NaN mask afterwards keeps the
-%   curve's support identical to the data's.
+%   movmean's 'shrink' endpoint rule truncates the window at the boundary --
+%   it does NOT leave the boundary sample alone. At the first sample a window
+%   of w still averages about w/2 samples. For depth and velocity that is
+%   harmless: their support starts PreCapMs before impact, where the curve is
+%   flat and the window is full well before anything interesting happens.
+%
+%   For a + g it is not harmless, and 'edgePreserve' exists for it. That row's
+%   support starts abruptly AT impact -- kd_kinematics masks a outside
+%   [impact_index, stopFrame] -- and the first millisecond is the steepest part
+%   of the whole trace. A shrunk-but-still-multi-sample window at that boundary
+%   averages the measured onset together with the rise above it and reports the
+%   mid-rise value as the starting point.
+%
+%   With edgePreserve the window's half-width is the distance to the nearest
+%   end of the finite support, capped at the full half-width: exactly one
+%   sample at each end, growing symmetrically to the full window inside. The
+%   first and last samples are therefore returned unchanged, and because the
+%   window stays symmetric nothing is phase-shifted.
+    if nargin < 7 || isempty(edgePreserve), edgePreserve = false; end
     if isempty(gridMs)
         if nargin < 6 || numel(tMs) < 2, y = yRaw; return; end
         gridMs = median(diff(tMs), 'omitnan');
@@ -632,6 +754,9 @@ function y = local_smooth_row(yRaw, gridMs, windowMs, medianStopMs, rowLabel, tM
     w = max(1, round(windowMs / gridMs));
     y = movmean(yRaw, w, 'omitnan');
     y(isnan(yRaw)) = NaN;
+    if edgePreserve && w > 1
+        y = local_ramp_edges(yRaw, y, w);
+    end
 
     if isfinite(medianStopMs) && medianStopMs > 0 && windowMs > 0.10*medianStopMs
         warning('fig_kinematics:overSmooth', ...
@@ -641,16 +766,52 @@ function y = local_smooth_row(yRaw, gridMs, windowMs, medianStopMs, rowLabel, tM
     end
 end
 
+function y = local_ramp_edges(yRaw, y, w)
+%LOCAL_RAMP_EDGES  Re-average the samples near each end of a row's finite
+%   support with a symmetric window that shrinks to a single sample at the edge.
+%
+%   Half-width = distance to the nearer end of the support, capped at floor(w/2)
+%   -- so the edge sample is itself, the next one averages three, and so on
+%   until the full movmean window applies. Written as one pass over the support
+%   rather than two edge loops so that a support shorter than the window cannot
+%   have one edge's ramp overwrite the other's.
+%
+%   NaN-aware in the same sense as movmean(...,'omitnan'): a window containing
+%   only NaN yields NaN, which the caller's mask would restore anyway.
+    n = numel(yRaw);
+    f = find(isfinite(yRaw), 1, 'first');
+    l = find(isfinite(yRaw), 1, 'last');
+    if isempty(f) || l <= f, return; end
+    half = floor(w/2);
+    if half < 1, return; end
+
+    for i = f:l
+        k = min(i - f, l - i);
+        if k >= half, continue; end      % full window already applies here
+        lo  = max(f, i - k);
+        hi  = min(min(l, n), i + k);
+        seg = yRaw(lo:hi);
+        seg = seg(isfinite(seg));
+        if isempty(seg), y(i) = NaN; else, y(i) = mean(seg); end
+    end
+end
+
 % ═════════════════════════════════════════════════════════════════════════
 %  DIAGNOSTICS
 % ═════════════════════════════════════════════════════════════════════════
 function local_diagnose(C, opt)
 %LOCAL_DIAGNOSE  Per-height numbers behind the ensemble, and the a+g onset.
 %
-%   Documents two things the render alone cannot show: how far apart the
-%   replicate stop times are (the mechanism the retired MinReplicates rule
-%   turned into survivor bias), and whether display smoothing moves the a+g
-%   onset (it should not -- the movmean shrinks its window at the edge).
+%   Documents what the render alone cannot show, and asserts on three things
+%   that must hold:
+%
+%     * how far apart the replicate stop times are -- the mechanism the retired
+%       MinReplicates rule turned into survivor bias
+%     * CONTINUITY: no interior NaN in any curve, after the rest fill
+%     * ENDPOINTS: depth, velocity and the a+g terminal segment all end at the
+%       same t for each (model, height)
+%     * ONSET: display smoothing leaves the first a+g sample exactly as the
+%       aggregate produced it
 
     fprintf('\n=== DIAGNOSE ===\n');
     models = unique([C.model], 'stable');
@@ -692,6 +853,39 @@ function local_diagnose(C, opt)
             fprintf('    continuity: OK -- no interior NaNs in any curve (z, v, a+g)\n');
         end
 
+        % Endpoint identity: depth, velocity and the a+g terminal segment must
+        % all finish at the SAME t for a given (model, height). One stop per
+        % height per geometry, shared across that figure's three panels -- if
+        % these ever diverged, the a+g panel would be telling a different story
+        % about when the rod stopped than the two above it.
+        badEnd = false;
+        for q = sel
+            tz = local_last_t(C(q).t_ms, C(q).z);
+            tv = local_last_t(C(q).t_ms, C(q).v);
+            if ~isempty(C(q).agTermT)
+                ta = C(q).agTermT(end);
+            else
+                ta = local_last_t(C(q).t_ms, C(q).ag);
+            end
+            % Half a sample of whatever axis this curve is on -- the ensemble
+            % grid under Style 'mean', the trial's own frames under 'trials'.
+            % They should agree exactly; the tolerance only stops a rounding
+            % difference being reported as a failure.
+            tol = 0.5 * median(diff(C(q).t_ms), 'omitnan');
+            if ~(tol > 0), tol = 0.5 * opt.GridMs; end
+            if ~(isfinite(tz) && isfinite(tv) && isfinite(ta)) || ...
+                    max(abs([tz tv ta] - C(q).tEndMs)) > tol
+                badEnd = true;
+                fprintf(['    ENDPOINT FAIL h = %g mm: z ends %.3f, v ends ' ...
+                         '%.3f, a+g ends %.3f, unified %.3f ms\n'], ...
+                        C(q).height, tz, tv, ta, C(q).tEndMs);
+            end
+        end
+        if ~badEnd
+            fprintf(['    endpoints: OK -- z, v and a+g all end at the same ' ...
+                     'unified stop per height\n']);
+        end
+
         nShort = sum([C(sel).nShortRec]);
         if nShort > 0
             fprintf(['    NOTE: %d trial(s) had recordings ending before their ' ...
@@ -715,9 +909,19 @@ function local_diagnose(C, opt)
             fprintf('      t (ms)   : %s\n', local_fmt(C(q).t_ms(ii)));
             fprintf('      raw      : %s\n', local_fmt(C(q).agRaw(ii)));
             fprintf('      smoothed : %s\n', local_fmt(C(q).ag(ii)));
-            fprintf(['      (smoothing window %g ms; movmean shrinks at the ' ...
-                     'edge, so the\n       first sample is not shifted)\n'], ...
+            fprintf(['      (smoothing window %g ms, edge-preserving: the ' ...
+                     'window''s half-width is\n       the distance to the ' ...
+                     'edge of the support, so the first sample above is\n' ...
+                     '       returned unchanged. movmean''s own ''shrink'' ' ...
+                     'rule does NOT do this --\n       it truncates the ' ...
+                     'window but still averages ~w/2 samples, which lifted\n' ...
+                     '       the onset off g and into the rise.)\n'], ...
                     opt.SmoothMs.ag);
+            d0 = abs(C(q).ag(gi) - C(q).agRaw(gi));
+            if d0 > 1e-9
+                fprintf(['      ONSET FAIL: smoothed first sample differs ' ...
+                         'from the aggregate by %.3g\n'], d0);
+            end
         end
     end
     fprintf('\n');
@@ -726,6 +930,13 @@ end
 function s = local_fmt(v)
     s = strjoin(arrayfun(@(x) sprintf('%9.2f', x), v(:).', ...
                          'UniformOutput', false), ' ');
+end
+
+function t = local_last_t(tAxis, y)
+%LOCAL_LAST_T  The time of a row's last finite sample; NaN if it has none.
+    t = NaN;
+    i = find(isfinite(y), 1, 'last');
+    if ~isempty(i), t = tAxis(i); end
 end
 
 % ═════════════════════════════════════════════════════════════════════════
@@ -750,6 +961,12 @@ function LIMS = local_shared_limits(C, O, opt)
     for k = 1:numel(C)
         idx = find(isfinite(C(k).z) | isfinite(C(k).v) | isfinite(C(k).ag), 1, 'last');
         if ~isempty(idx), lastDrawn = max(lastDrawn, C(k).t_ms(idx)); end
+        % The a+g terminal segment ends at the same unified stop as z and v, so
+        % this should never extend the range -- included so that if it ever did,
+        % the segment would be inside the frame rather than clipped off it.
+        if ~isempty(C(k).agTermT)
+            lastDrawn = max(lastDrawn, max(C(k).agTermT));
+        end
     end
     for k = 1:numel(O)
         idx = find(isfinite(O(k).z) | isfinite(O(k).v), 1, 'last');
@@ -769,7 +986,10 @@ function LIMS = local_shared_limits(C, O, opt)
     YL_v = local_pad_ylim(vAll, MARGIN);
     YL_v(1) = 0;                 % velocity floor is zero: nothing below rest
 
-    agAll = vertcat(C.ag);
+    % The terminal segments are part of the drawn a+g data: they reach down to
+    % g, which is below every deceleration value, so leaving them out would put
+    % the rest state under the axis floor on the log scale.
+    agAll = [vertcat(C.ag); vertcat(C.agTermY)];
     YL_ag_lin = local_pad_ylim(agAll, MARGIN);
     YL_ag_lin(1) = 0;            % a+g is a magnitude here; the axis starts at 0
     YL_ag_log = local_log_ylim(agAll, opt.AccelYMin);
@@ -894,6 +1114,17 @@ function local_draw_panel(ax, rowKey, model, C, O, CLIM, CMAP, LIMS, opt)
         end
         col = local_v0_color(C(k).medV0, CLIM, CMAP);
         plot(ax, C(k).t_ms, y, '-', 'LineWidth', 2.0, 'Color', col);
+
+        if strcmp(rowKey, 'ag') && ~isempty(C(k).agTermT)
+            % The measured rest state: a = 0 at rest, so a + g = g. Same colour
+            % and weight as the curve because it IS the curve's last segment --
+            % it ends at the same unified stop as the depth and velocity
+            % panels, and nothing is drawn past it. See local_ag_terminal.
+            tSeg = C(k).agTermT;  ySeg = C(k).agTermY;
+            if strcmp(opt.AccelScale, 'log'), ySeg(ySeg <= 0) = NaN; end
+            plot(ax, tSeg, ySeg, '-', 'LineWidth', 2.0, 'Color', col, ...
+                 'HandleVisibility', 'off');
+        end
 
         if strcmp(rowKey, 'z')
             % Stop marker at the unified endpoint: the height's median t_stop.

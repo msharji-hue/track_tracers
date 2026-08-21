@@ -377,7 +377,9 @@ written back, and no fit sees any of it:
 | after each trial's OWN detected `t_stop` (`kin.t_stop_s`, never the quarantined table scalar), fill ALL of that trial's remaining grid points — to the end of the grid, not just to its own last sample — with its measured **rest state** — `v = 0`, depth = its `d_final`, `a + g = NaN`. Filling to the grid end is what keeps a trial in the pointwise aggregate for the whole drawn interval; stopping at its last sample leaves NaNs *inside* the region and can void the median mid-curve. Where a recording ends before its detected `t_stop`, rest-fill begins at that last sample instead — an approximation, counted and reported as `nShortRec` under `'Diagnose', true` | depth, v (not `a + g`: the pipeline computes no post-stop acceleration, and none is invented here) |
 | pointwise `Average` across the **full replicate set** (`'median'` default, or `'mean'`) at every grid point | all rows |
 | curve terminates at the height's **median replicate `t_stop`** — the same endpoint in all three panels | all rows |
-| `movmean` per row (`SmoothMs`: depth 1.0 ms, v 2.0 ms, a+g 1.5 ms), applied AFTER aggregation; NaN-aware and edge-shrinking, so the leading edge at impact is neither shifted nor truncated; the pre-smoothing NaN mask is re-applied afterward | each row independently |
+| `movmean` per row (`SmoothMs`: depth 1.0 ms, v 2.0 ms, a+g 1.5 ms), applied AFTER aggregation; NaN-aware, with the pre-smoothing NaN mask re-applied afterward | each row independently |
+| **edge-preserving** smoothing — window half-width = distance to the edge of the finite support, so the first and last samples are returned unchanged and the window stays symmetric | `a + g` only |
+| append one final segment from the last computed value down to `a + g = g` at the unified stop — the measured rest state | `a + g` only |
 | on the default linear axis, nothing is masked or clipped. Under `'AccelScale','log'` only, mask `a + g <= AccelYMin` to NaN, since a log axis cannot render non-positive values | `a + g` only |
 
 **Why rest-extension replaced "terminate below `MinReplicates`".** Replicates
@@ -419,6 +421,41 @@ Depth and v are never clamped; v's y-axis lower limit is fixed at 0.
 **Axis margins.** Every axis is padded by 5% of its drawn data range, so no
 curve, marker or endpoint sits on the frame. Limits are computed once from the
 pooled drawn data and shared across models within each row.
+
+**The `a + g` curve ends in the measured rest state.** One final segment runs
+from the last computed value down to `a + g = g` at the unified stop: at rest
+the bed carries the rod's weight, so `a = 0` and `a + g = g` exactly. That is a
+measured state, not an extrapolation — and the one point after the stop that is
+known rather than guessed, which is why it is drawn while the post-stop trace
+is not. The drop across the segment is the per-height **acceleration
+discontinuity**: how much net upward acceleration the grains were still
+supplying at the instant the rod stopped.
+
+It terminates at the **same** `t` as the depth and velocity curves — one stop
+per `(model, height)`, shared by that figure's three panels, never a separately
+computed acceleration endpoint and never shared between geometries. Nothing is
+drawn past it. `'Diagnose', true` asserts the three endpoints are identical.
+
+**Why the `a + g` row alone is smoothed edge-preserving.** `movmean`'s
+`'shrink'` rule truncates the window at a boundary but still averages about
+half a window there. Depth and velocity begin `PreCapMs` before impact, where
+the curve is flat, so that costs nothing. `a + g` begins *at* impact, on the
+steepest part of the trace: at the impact sample `v` is maximal, so `a ≈ 0` and
+`a + g ≈ g` (~0.1e4). Averaging that measured onset together with the rise above
+it reported the mid-rise value (0.3–1.6e4) as the curve's starting point.
+
+Setting the window's half-width to the distance from the edge of the finite
+support returns the first and last samples unchanged while keeping the window
+symmetric, so nothing is phase-shifted. `'Diagnose', true` asserts the first
+`a + g` sample equals the aggregate's.
+
+**Colour is one global `v0` scale across all three geometries.** The range is
+computed once over every retained height of every model and handed unchanged to
+each figure, so the same physical `v0` is the same colour in Default, Tight and
+Wide. Zero-drop curves are excluded from the range even when drawn: their `v0`
+is 0 by quarantine rather than by measurement, so including it would anchor the
+scale at zero and compress every real curve into the top of the colormap. The
+range is printed in the run summary and returned as `R.clim`.
 
 **Style.** A dashed vertical line at `t = 0` in every panel; a solid thin line
 at `depth = 0` in the depth panel (the bed surface); no other reference lines.
