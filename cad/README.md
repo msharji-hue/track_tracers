@@ -21,10 +21,9 @@ absent. It never substitutes, approximates or synthesizes geometry — a figure
 that silently drew something other than the real model would be worse than no
 figure.
 
-> **Note:** a copy of `jerboa_foot_model_rectangularbeam.stl` already exists in
-> `src/`, left over from earlier work. It is the Default model. Move it here
-> rather than exporting a fresh one if it is the same revision; the scripts read
-> only from `cad/`.
+All three are present. The Default model previously sat in `src/` as leftover
+from earlier work; it was moved here, and `src/` no longer holds geometry. The
+scripts read only from `cad/`.
 
 ## Provenance
 
