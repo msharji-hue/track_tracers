@@ -382,8 +382,23 @@ default**, so every analysis reaching data through the loader drops the same
 trials — this is what stopped the per-script copies from drifting apart when
 `load_default_gb` was retired.
 
-As of the 2026-08-20 review it holds **23 Default GB/full trials**, all excluded
-for stop-fit failure or a bad velocity profile.
+The list is kept as one **block per review decision**, concatenated at the end
+of the function. The block header carries the full reasoning; each line still
+carries a short reason and a date, so a tag stays self-describing if a block is
+ever split. Two reviews are recorded:
+
+| block | n | reason |
+|---|---|---|
+| 2026-08-20 | 23 | stop-fit failure or a bad velocity profile (all Default GB/full) |
+| 2026-08-21 A | 5 | `v0`/`t_stop` inconsistent with any ladder height — off-ladder drop or failed trial |
+| 2026-08-21 B | 14 | measurement failure: `v0` inconsistent with the trial's own `d_final` and/or above any free-fall bound |
+| 2026-08-21 C | 1 | `v0` matches the 125 mm class but `d_final` = 1.71 cm sits outside that bin's core; no clean match |
+
+Block A's five are not individually odd. As a *group* they share a coherent
+low-`v0` / long-`t_stop` signature matching no rung of the ladder — and
+specifically not 65 mm, where the two relabeled 25 mm trials went. A consistent
+signature that fits nothing is a different failure from a noisy trace, and it
+is why they are excluded rather than relabeled: there is no bin to move them to.
 
 **Overriding.** Passing `'exclude'` **replaces** the list rather than adding to
 it:
@@ -407,6 +422,79 @@ a stale tag left after a rename is otherwise invisible.
 Anything expressible as a rule belongs in the rules, not in the manual list.
 To retire a manual exclusion, delete its line: git history is the record of
 what was once excluded, and a commented-out tag reads as ambiguous forever.
+
+**Excluding is not the only answer.** A trial whose *height label* is wrong but
+whose data are sound belongs in `get_relabel_map` (below), not here: excluding
+throws away a good measurement, relabeling keeps it in the bin it came from.
+Exclusion is for trials with no bin to go to.
+
+---
+
+## Height relabeling: `dropHeight_mm` vs `dropHeight_asRecorded`
+
+`src/get_relabel_map.m`, applied by `src/load_kinematics_set.m`.
+
+A few trials carry a recorded height label that review established is wrong.
+`get_relabel_map` returns a `trialTag` → corrected `dropHeight_mm` table, one
+row per trial with its reason and date, and the loader applies it **at read
+time**.
+
+| column | meaning |
+|---|---|
+| `dropHeight_mm` | the **corrected** height — what every axis, bin and fit should use |
+| `dropHeight_asRecorded` | the label as it came off the CSV; provenance, not a measurement |
+| `relabeled` | true where `dropHeight_mm` came from the map |
+
+**Nothing on disk is modified.** Raw videos, `01_FRAMES`, tracks, `_kin.mat`
+and `_kin_scalars.csv` all keep their original labels — including the height
+baked into the `trialTag` itself, so a relabeled trial reads `25mm_...`
+forever. That is deliberate: renaming files would break provenance back to the
+capture session and to every diagnostic ever run against that tag. The cost is
+that anything reading the CSVs *directly* rather than through
+`load_kinematics_set` sees the original label.
+
+Applied **before** `isZeroDrop` and before the zero-drop quarantine, because
+the corrected height is the physical truth: were a relabel ever to move a trial
+to or from `h = 0`, every rule downstream must see the corrected value.
+
+As of 2026-08-21 the map holds **two** entries — Default `25mm_T02` and
+`25mm_T03` → **65 mm** — each a quantitative match to the 65 mm bin on `v0`,
+`d_final` and `t_stop` (`d2` = 1.2 and 5.7, margin to the next-best bin ≥ 19),
+confirmed by trace overlay. The loader prints a summary line whenever a relabel
+fires, and reports any mapped tag that matched no file.
+
+---
+
+## The `v0` consistency guard
+
+`src/load_kinematics_set.m` → the guard block, after exclusions.
+
+Every kept `h > 0` trial is checked against the free-fall speed its label
+implies, `sqrt(2gh)` with `g` = 980 cm/s² (as `calib.g_cm_s2`). The measured
+ratio is returned as `v0_freefall_ratio`.
+
+| side | test | option | what it means |
+|---|---|---|---|
+| high | `v0 > v0RatioMax · sqrt(2gh)` | `'v0RatioMax'` (default 1.15) | physically impossible — the **label** or the **time base** is wrong |
+| low | `v0 < 0.5 · sqrt(2gh)` | fixed | a spoiled or snagged release (e.g. the known 85 mm Default trial at 39.9 cm/s) |
+
+**It warns and counts; it never drops.** Which trials to remove is a review
+decision that belongs in `get_manual_exclusions` with a reason attached, not in
+an automatic filter that would quietly reshape a bin the next time a threshold
+moved. The two sides are not symmetric: exceeding free fall is impossible once
+tolerance is allowed for, while falling short of it merely needs explaining, so
+the low-side threshold is deliberately loose — half of free fall is far below
+any honest air-drag loss over these heights.
+
+Real drops land a few percent *below* free fall, so the healthy ratio is just
+under 1. Two campaigns sit systematically above it because their release-height
+reference was offset; those warnings are documented behaviour, not bad trials —
+see the data notes in `README.md`.
+
+Option names on `load_kinematics_set` are matched case-insensitively and an
+unrecognised name is an **error**. A mistyped `'v0RatioMax'` would otherwise be
+absorbed as a struct field nothing reads, disabling the guard with no sign that
+it had happened.
 
 ---
 
