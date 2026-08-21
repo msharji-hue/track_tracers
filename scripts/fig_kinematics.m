@@ -8,17 +8,20 @@ function R = fig_kinematics(varargin)
 %   USAGE
 %       fig_kinematics
 %       fig_kinematics('Root', 'D:\ME_GRANULAB\JerboaImpact')
-%       R = fig_kinematics('AllTrials', true, 'Save', false);
+%       R = fig_kinematics('Style', 'trials');        % QA: every trial
 %
 %   OPTIONS (name-value)
-%       'Root'       results root (parent of 03_RESULTS); '' prompts
-%       'Models'     column order (default ["Default","Tight","Wide"])
-%       'AllTrials'  plot every kept trial (default false: one representative
-%                    per model x height, see below)
-%       'PreCapMs'   pre-impact context cap, ms (default 20)
-%       'OutDir'     default <Root>/03_RESULTS/_figures
-%       'Save'       write PDF + PNG (default true)
-%       'Show'       display the figure (default true)
+%       'Root'           results root (parent of 03_RESULTS); '' prompts
+%       'Models'         column order (default ["Default","Tight","Wide"])
+%       'Style'          'mean' (default) one ensemble curve per height
+%                        'trials'         every kept trial, for QA
+%       'PreCapMs'       pre-impact context cap, ms (default 20)
+%       'GridMs'         ensemble time step, ms (default 0.2)
+%       'SmoothAccelMs'  display movmean window on a+g, ms (default 1.5)
+%       'MinReplicates'  ensemble ends below this many trials (default 3)
+%       'OutDir'         default <Root>/03_RESULTS/_figures
+%       'Save'           write PDF + PNG (default true)
+%       'Show'           display the figure (default true)
 %
 %   FIELD NAMES are read from kd_kinematics' save block, not assumed:
 %       kin.t_s        time, ALREADY re-zeroed at impact (kd_kinematics step 5:
@@ -27,55 +30,68 @@ function R = fig_kinematics(varargin)
 %       kin.v          smoothed velocity. The local variable inside
 %                      kd_kinematics is v_smooth; it is NOT saved under that
 %                      name, and reading kin.v_smooth returns nothing.
-%       kin.a           raw per-frame acceleration. a+g is RECOMPUTED from
-%                       this as g - a rather than read from kin.a_plus_g --
-%                       see below.
-%       kin.impact_index, kin.stopFrame
+%       kin.stopFrame
 %   Table columns (trialTag, model, dropHeight_mm, v0_cm_s, isZeroDrop,
 %   kinPath) come from load_kinematics_set.
 %
-%   SIGN CONVENTION is pipeline-native and is NOT mirrored to KD 2007: depth
-%   is positive INTO the bed (rod_displacement, signConvention +1).
+%   ENSEMBLE MEANS (Style 'mean'). For each (model, height) every kept trial is
+%   interpolated onto one uniform grid relative to impact, then averaged across
+%   replicates point by point, using only the trials that still have data
+%   there. Pre-impact context and stop times differ per trial, so coverage
+%   falls off at both ends; a curve TERMINATES where fewer than MinReplicates
+%   trials remain. Shorter trials are never padded with their final value,
+%   which would invent a plateau that no trial measured.
 %
-%   ROW 3 IS RECOMPUTED, NOT READ. a+g comes from src/net_accel.m as g - a,
-%   derived from the stored raw a trace, rather than from the kin.a_plus_g
-%   column. _kin.mat files written before the 2026-08 sign correction hold the
-%   old -a - g in that column -- the same quantity offset by a constant -2g
-%   with the rest state inverted -- so recomputing makes every already-processed
-%   trial render correctly with no Stage B re-run. The raw a trace was never
-%   affected by the bug.
+%   h = 0 ANCHOR. Zero-drop trials go through the IDENTICAL pipeline as every
+%   other height for depth and velocity -- same grid, same averaging, same
+%   termination rule -- from their measured traces. load_kinematics_set
+%   quarantines the zero-drop SCALARS (d_final, t_stop, a_stop are NaN), but
+%   the kin TRACES are intact and are what this figure uses. Those trials have
+%   no meaningful stop, so their window is the full available span rather than
+%   [-PreCapMs, t_stop].
 %
-%   In this convention free fall sits at 0, a resting rod at +g, and
-%   deceleration is large and positive, matching KD 2007 Fig. 1.
+%   ROW 3 uses net_accel(kin), which computes the net grain acceleration
+%   as g - a from the stored raw acceleration trace. In this convention,
+%   free fall is 0, rest is +g, and deceleration is positive.
+
+%   SIGN CONVENTION is pipeline-native and is NOT mirrored to KD 2007: depth is
+%   positive INTO the bed (rod_displacement, signConvention +1).
 %
-%   NOTE ON THE PRE-IMPACT SEGMENT. kd_kinematics masks a to NaN outside
-%   [impact_index, stopFrame] (step 7), so row 3 still has no pre-impact
-%   context however large PreCapMs is -- the free-fall baseline KD show is not
-%   in this pipeline's output. Rows 1 and 2 do show it.
+%   ROW 3 uses net_accel(kin), which computes the net grain acceleration
+%   as g - a from the stored raw acceleration trace.
 %
-%   TIME WINDOW per trial: every available pre-impact frame up to PreCapMs
-%   before impact, through stopFrame, and nothing after the stop.
+%   This is implemented exactly as specified and flagged rather than silently
+%   reconciled, because the fix belongs in kd_kinematics or in the caption, not
+%   in a plotting script. Confirm against a known trial before this figure goes
+%   in a paper.
 %
-%   ZERO-DROP TRIALS are drawn as flat lines at zero, one per model,
-%   de-emphasized. load_kinematics_set quarantines their impact-derived
-%   quantities -- released from contact, so there is no impact, no stop and no
-%   depth -- and plotting their raw traces would present a release transient as
-%   though it were an impact. A line at zero is what the protocol asserts.
-%
-%   COLOUR encodes v0 on one perceptually-uniform map shared by every panel,
-%   with a single colorbar. Model is carried by the columns, so colouring by
-%   model would spend the colour channel on information the layout already
-%   gives.
+%   DISPLAY LAYER. Everything below affects the drawing only. Nothing is
+%   written back, and no fit ever sees it:
+%     - v and a+g are clamped at max(value, 0). Depth is unclamped.
+%     - a+g gets a light movmean (SmoothAccelMs) AFTER averaging and BEFORE
+%       clamping. Depth and v get none: replicate averaging is enough.
+%     - no raw markers, no scatter, no shaded bands.
 
 % ── options ──────────────────────────────────────────────────────────────
-opt.Root      = '';
-opt.Models    = ["Default","Tight","Wide"];
-opt.AllTrials = false;
-opt.PreCapMs  = 20;
-opt.OutDir    = '';
-opt.Save      = true;
-opt.Show      = true;
+opt.Root          = '';
+opt.Models        = ["Default","Tight","Wide"];
+opt.Style         = 'mean';
+opt.PreCapMs      = 20;
+opt.GridMs        = 0.2;
+opt.SmoothAccelMs = 1.5;
+opt.MinReplicates = 3;
+opt.OutDir        = '';
+opt.Save          = true;
+opt.Show          = true;
 for i = 1:2:numel(varargin), opt.(varargin{i}) = varargin{i+1}; end
+
+opt.Style  = lower(char(opt.Style));
+if ~ismember(opt.Style, {'mean','trials'})
+    error('fig_kinematics:badStyle', ...
+          'Style must be ''mean'' or ''trials'', got "%s".', opt.Style);
+end
+opt.Models = string(opt.Models);
+nCol = numel(opt.Models);
 
 thisDir = fileparts(mfilename('fullpath'));
 addpath(fullfile(fileparts(thisDir), 'src'));
@@ -85,20 +101,20 @@ if isempty(root), fprintf('Cancelled.\n'); return; end
 if isempty(opt.OutDir)
     opt.OutDir = fullfile(root, '03_RESULTS', '_figures');
 end
-opt.Models = string(opt.Models);
-nCol = numel(opt.Models);
 
 fprintf('\n=== fig_kinematics ===\n');
-fprintf('  Root     : %s\n', root);
-fprintf('  Models   : %s\n', strjoin(cellstr(opt.Models), ', '));
-fprintf('  Trials   : %s\n', local_tern(opt.AllTrials, 'all kept', ...
-        'one per (model, height): v0 closest to the height mean'));
-fprintf('  PreCapMs : %g ms of pre-impact context\n', opt.PreCapMs);
-fprintf('  OutDir   : %s\n', opt.OutDir);
+fprintf('  Root          : %s\n', root);
+fprintf('  Models        : %s\n', strjoin(cellstr(opt.Models), ', '));
+fprintf('  Style         : %s\n', opt.Style);
+fprintf('  PreCapMs      : %g ms\n', opt.PreCapMs);
+fprintf('  GridMs        : %g ms\n', opt.GridMs);
+fprintf('  SmoothAccelMs : %g ms (a+g display smooth)\n', opt.SmoothAccelMs);
+fprintf('  MinReplicates : %d\n', opt.MinReplicates);
+fprintf('  OutDir        : %s\n', opt.OutDir);
 
 % ── data ─────────────────────────────────────────────────────────────────
-% Manual exclusions and the zero-drop quarantine are applied by the loader, so
-% every row returned is already a kept trial.
+% Manual exclusions and the zero-drop scalar quarantine are applied by the
+% loader; every row returned is a kept trial.
 K = load_kinematics_set(root);
 K = K(ismember(K.model, opt.Models), :);
 if isempty(K)
@@ -106,55 +122,53 @@ if isempty(K)
           strjoin(cellstr(opt.Models), ', '), root);
 end
 
-[sel, nGroups] = local_select(K, opt);
-
-fprintf('\n--- trials per panel ---\n');
-if ~opt.AllTrials
-    fprintf('  %d (model, height) group(s) -> one representative each\n', nGroups);
+switch opt.Style
+    case 'mean',   C = local_build_ensembles(K, opt);
+    case 'trials', C = local_build_trials(K, opt);
 end
-for c = 1:nCol
-    nReal = sum(sel.model == opt.Models(c) & ~sel.isZeroDrop);
-    nZero = sum(sel.model == opt.Models(c) &  sel.isZeroDrop);
-    fprintf('  %-8s %3d curve(s)%s\n', opt.Models(c), nReal, ...
-        local_tern(nZero > 0, sprintf('  + %d zero-drop (flat at 0)', nZero), ''));
-end
-
-% ── load the series ──────────────────────────────────────────────────────
-% load_kinematics_set's 'series' option returns only z/v/t, not the raw a that
-% a+g is recomputed from, so each trial's _kin.mat is read directly here.
-nS      = height(sel);
-S       = repmat(struct('t_ms',[], 'z',[], 'v',[], 'ag',[]), nS, 1);
-usable  = false(nS,1);
-for i = 1:nS
-    if sel.isZeroDrop(i), continue; end     % flat lines, no series needed
-    [S(i), usable(i)] = local_load_series(sel.kinPath(i), opt.PreCapMs);
-end
-nSkipped = sum(~usable & ~sel.isZeroDrop);
-if nSkipped > 0
-    fprintf('  %d trial(s) skipped: unreadable _kin.mat or empty time window\n', ...
-            nSkipped);
-end
-if ~any(usable)
+if isempty(C)
     error('fig_kinematics:nothingToPlot', ...
-        ['No usable series. Every selected trial had an unreadable _kin.mat ' ...
-         'or no frames within [-%g ms, stopFrame].'], opt.PreCapMs);
+        ['No curve survived. Every group was either unreadable or fell below ' ...
+         'MinReplicates = %d across the whole grid.'], opt.MinReplicates);
 end
 
-% ── shared colour scale ──────────────────────────────────────────────────
-v0all = sel.v0_cm_s(usable);
-CLIM  = [min(v0all), max(v0all)];
-if diff(CLIM) <= 0, CLIM = CLIM + [-1 1]; end   % single-v0 edge case
-CMAP  = parula(256);
+% ── provenance ───────────────────────────────────────────────────────────
+fprintf('\n--- curves per panel ---\n');
+for c = 1:nCol
+    inCol = [C.model] == opt.Models(c);
+    if ~any(inCol)
+        fprintf('  %-8s none\n', opt.Models(c));
+        continue
+    end
+    reps = [C(inCol).nMax];
+    fprintf('  %-8s %2d height curve(s), replicates %d-%d per height\n', ...
+            opt.Models(c), sum(inCol), min(reps), max(reps));
+    z0 = C(inCol);
+    z0 = z0([z0.isZeroDrop]);
+    if isempty(z0)
+        fprintf('           (no h = 0 anchor: no zero-drop trials for this model)\n');
+    elseif all(arrayfun(@(s) all(isnan(s.z)), z0))
+        fprintf(['           WARNING: h = 0 anchor is empty -- fewer than %d ' ...
+                 'zero-drop replicates\n'], opt.MinReplicates);
+    end
+end
+fprintf(['\n  display layer: per-height ensemble means; a+g movmean %g ms; ' ...
+         'v and a+g\n  clamped at 0; quantitative fits use unmodified ' ...
+         'pipeline kinematics.\n'], opt.SmoothAccelMs);
+
+% ── colour: mean v0 per height, on turbo over [0, max] ───────────────────
+CLIM = [0, max([C.meanV0])];
+if diff(CLIM) <= 0, CLIM = [0, 1]; end
+CMAP = local_colormap(256);
 
 % ── figure ───────────────────────────────────────────────────────────────
 fig = figure('Color','w','Units','inches','Position',[1 1 7.0 6.4], ...
              'Visible', local_tern(opt.Show,'on','off'));
 tl  = tiledlayout(fig, 3, nCol, 'Padding','compact', 'TileSpacing','compact');
-colormap(fig, CMAP);
 
-ROWS = { 'z',  'depth (cm)'      ; ...
-         'v',  'v (cm/s)'        ; ...
-         'ag', 'a + g (cm/s^2)'  };
+ROWS = { 'z',  'depth (cm)'     ; ...
+         'v',  'v (cm/s)'       ; ...
+         'ag', 'a + g (cm/s^2)' };
 
 AX = gobjects(3, nCol);
 for r = 1:3
@@ -163,31 +177,39 @@ for r = 1:3
         hold(ax,'on'); box(ax,'on');
         AX(r,c) = ax;
 
-        inCol = find(sel.model == opt.Models(c)).';
-
-        % Zero-drop first so real traces draw over it. Depth and velocity are
-        % flat at zero by protocol; row 3 is left empty, since a is masked
-        % outside [impact, stop] and that window is degenerate without an
-        % impact.
-        if r <= 2 && any(sel.isZeroDrop(inCol))
-            yline(ax, 0, '-', 'Color', [0.78 0.78 0.78], 'LineWidth', 1.0);
+        % Thin light zero-line on depth and velocity.
+        if r <= 2
+            yline(ax, 0, '-', 'Color', [0.85 0.85 0.85], 'LineWidth', 0.5);
         end
 
-        for i = inCol
-            if ~usable(i), continue; end
-            y = S(i).(ROWS{r,1});
+        for k = find([C.model] == opt.Models(c))
+            y = C(k).(ROWS{r,1});
             if isempty(y) || all(isnan(y)), continue; end
-            plot(ax, S(i).t_ms, y, '-', 'LineWidth', 0.8, ...
-                 'Color', local_v0_color(sel.v0_cm_s(i), CLIM, CMAP));
-        end
+            plot(ax, C(k).t_ms, y, '-', 'LineWidth', 0.9, ...
+                 'Color', local_v0_color(C(k).meanV0, CLIM, CMAP));
 
-        % Sets the colorbar's scale; clim() is R2022a+, caxis works everywhere.
-        caxis(ax, CLIM);
+            % 'h = 0' label at the right end of the anchor, depth and a+g only.
+            % Omitted in v, where it would collide with the axis.
+            if C(k).isZeroDrop && ismember(r, [1 3])
+                last = find(~isnan(y), 1, 'last');
+                if ~isempty(last)
+                    text(ax, C(k).t_ms(last), y(last), ' h = 0', ...
+                         'FontSize', 7, 'VerticalAlignment', 'middle', ...
+                         'HorizontalAlignment', 'left');
+                end
+            end
+        end
 
         set(ax, 'FontSize', 8, 'LineWidth', 0.5, 'Layer', 'top');
-        if r == 1, title(ax, opt.Models(c), 'FontSize', 9); end
-        if r == 3, xlabel(ax, 't - t_{impact} (ms)', 'FontSize', 8); end
-        if c == 1, ylabel(ax, ROWS{r,2}, 'FontSize', 8); end
+        if r == 1
+            title(ax, opt.Models(c), 'FontSize', 9, 'Interpreter', 'none');
+        end
+        if r == 3
+            xlabel(ax, 't - t_impact (ms)', 'FontSize', 8, 'Interpreter', 'none');
+        end
+        if c == 1
+            ylabel(ax, ROWS{r,2}, 'FontSize', 8, 'Interpreter', 'none');
+        end
     end
 end
 
@@ -207,16 +229,6 @@ for r = 1:3
         if c > 1, set(AX(r,c), 'YTickLabel', []); end
     end
 end
-
-cb = colorbar(AX(1,nCol));
-cb.Layout.Tile   = 'east';
-cb.Label.String  = 'v_0 (cm/s)';
-cb.Label.FontSize = 8;
-cb.FontSize      = 8;
-
-title(tl, sprintf(['Impact kinematics: depth positive into the bed, ' ...
-                   't from impact, %g ms pre-impact context'], opt.PreCapMs), ...
-      'FontSize', 9);
 
 % ── export ───────────────────────────────────────────────────────────────
 written = strings(0,1);
@@ -238,65 +250,116 @@ end
 fprintf('\n');
 
 R = struct();
-R.selected = sel;
-R.series   = S;
-R.usable   = usable;
-R.clim     = CLIM;
-R.written  = written;
-R.figure   = fig;
+R.curves  = C;
+R.clim    = CLIM;
+R.written = written;
+R.figure  = fig;
 end
 
 % ═════════════════════════════════════════════════════════════════════════
-function [sel, nGroups] = local_select(K, opt)
-%LOCAL_SELECT  One representative trial per (model, height), or everything.
+function C = local_build_ensembles(K, opt)
+%LOCAL_BUILD_ENSEMBLES  One mean curve per (model, height).
 %
-%   The representative is the trial whose v0 is closest to the MEAN v0 of its
-%   (model, height) group -- the most typical trial by the variable actually
-%   plotted, rather than whichever happened to be first on disk.
-%
-%   Zero-drop rows are thinned to one per model either way: they are identical
-%   flat lines by construction, so drawing several would darken a feature that
-%   carries no extra information.
+%   Every height, h = 0 included, goes through this same path: interpolate each
+%   replicate onto a shared grid, average where the replicates actually have
+%   data, and stop where coverage drops below MinReplicates.
 
-    drop = K(~K.isZeroDrop, :);
-    nGroups = 0;
+    G_CM_S2 = 980;
+    C = struct('model',{}, 'height',{}, 'meanV0',{}, 'isZeroDrop',{}, ...
+               'nMin',{}, 'nMax',{}, 't_ms',{}, 'z',{}, 'v',{}, 'ag',{});
 
-    if opt.AllTrials
-        keepTags = drop.trialTag;
-    else
-        g = findgroups(drop.model, drop.dropHeight_mm);
-        nGroups = max(g);
-        keepTags = strings(nGroups, 1);
-        for k = 1:nGroups
-            inGrp = find(g == k);
-            v0s   = drop.v0_cm_s(inGrp);
-            [~, best] = min(abs(v0s - mean(v0s)));
-            keepTags(k) = drop.trialTag(inGrp(best));
+    g = findgroups(K.model, K.dropHeight_mm);
+    for k = 1:max(g)
+        rows = find(g == k);
+        isZD = all(K.isZeroDrop(rows));
+
+        % Load every replicate's windowed trace.
+        T = cell(numel(rows),1);
+        for j = 1:numel(rows)
+            T{j} = local_load_trace(K.kinPath(rows(j)), opt.PreCapMs, isZD);
         end
-    end
+        T = T(~cellfun(@isempty, T));
+        if isempty(T), continue; end
 
-    rows = ismember(K.trialTag, keepTags) | K.isZeroDrop;
-    sel  = K(rows, :);
+        % Shared grid: from the pre-impact cap out to the longest replicate.
+        tEnd = max(cellfun(@(s) s.t_ms(end), T));
+        if tEnd <= -opt.PreCapMs, continue; end
+        grid = (-opt.PreCapMs : opt.GridMs : tEnd).';
 
-    % Thin the zero-drop rows to one per model.
-    kill = false(height(sel), 1);
-    for m = 1:numel(opt.Models)
-        z = find(sel.model == opt.Models(m) & sel.isZeroDrop);
-        if numel(z) > 1, kill(z(2:end)) = true; end
+        [zm, nz] = local_mean_on_grid(T, 'z',  grid, opt.MinReplicates);
+        [vm, nv] = local_mean_on_grid(T, 'v',  grid, opt.MinReplicates);
+        [am, na] = local_mean_on_grid(T, 'ag', grid, opt.MinReplicates);
+
+        % ── display layer ────────────────────────────────────────────────
+        % a+g: light smooth AFTER averaging, BEFORE clamping, so the clamp acts
+        % on the curve that will actually be drawn.
+        w = max(1, round(opt.SmoothAccelMs / opt.GridMs));
+        am = movmean(am, w, 'omitnan');
+
+        if isZD
+            % a+g is NaN outside the [impact, stop] window, and for a zero-drop
+            % trial that window is degenerate -- there is no impact and no
+            % stop -- so the pipeline has nothing to report here.
+            %
+            % DERIVATION (as specified): the measured v is flat, so
+            %     a = dv/dt = 0   ->   a + g = g
+            % and the anchor is the constant g over the span the depth curve
+            % covers.
+
+            am = nan(size(grid));
+            am(~isnan(zm)) = G_CM_S2;
+            na = nz;
+        end
+
+        % v and a+g clamped at zero for display; depth left alone.
+        vm = max(vm, 0);
+        am = max(am, 0);
+
+        v0s = K.v0_cm_s(rows);
+        nAll = [nz; nv; na];
+        C(end+1) = struct( ...                                    %#ok<AGROW>
+            'model',      K.model(rows(1)), ...
+            'height',     K.dropHeight_mm(rows(1)), ...
+            'meanV0',     mean(v0s, 'omitnan'), ...
+            'isZeroDrop', isZD, ...
+            'nMin',       min(nAll(nAll > 0), [], 'omitnan'), ...
+            'nMax',       numel(T), ...
+            't_ms',       grid, 'z', zm, 'v', vm, 'ag', am);
     end
-    sel = sel(~kill, :);
 end
 
-function [s, ok] = local_load_series(kinPath, preCapMs)
-%LOCAL_LOAD_SERIES  Per-trial series, windowed to [-preCapMs, stopFrame].
+function C = local_build_trials(K, opt)
+%LOCAL_BUILD_TRIALS  Every kept trial, unaveraged. QA view.
+%   Same display clamps as the ensemble path so the two are comparable, but no
+%   averaging and no smoothing: this exists to show what the means came from.
+    C = struct('model',{}, 'height',{}, 'meanV0',{}, 'isZeroDrop',{}, ...
+               'nMin',{}, 'nMax',{}, 't_ms',{}, 'z',{}, 'v',{}, 'ag',{});
+    for i = 1:height(K)
+        isZD = K.isZeroDrop(i);
+        s = local_load_trace(K.kinPath(i), opt.PreCapMs, isZD);
+        if isempty(s), continue; end
+        C(end+1) = struct( ...                                    %#ok<AGROW>
+            'model',      K.model(i), ...
+            'height',     K.dropHeight_mm(i), ...
+            'meanV0',     K.v0_cm_s(i), ...
+            'isZeroDrop', isZD, ...
+            'nMin',       1, 'nMax', 1, ...
+            't_ms',       s.t_ms, 'z', s.z, ...
+            'v',          max(s.v, 0), 'ag', max(s.ag, 0));
+    end
+end
+
+function s = local_load_trace(kinPath, preCapMs, isZeroDrop)
+%LOCAL_LOAD_TRACE  One trial's windowed series, or [] if unusable.
 %
 %   kin.t_s is ALREADY relative to impact (kd_kinematics step 5), so it is used
-%   as-is with no further shift. The window keeps every available pre-impact
-%   frame up to the cap and ends AT stopFrame: after the stop the traces are
-%   either masked or physically meaningless.
+%   as-is. The window keeps every available pre-impact frame up to the cap and
+%   ends AT stopFrame -- after the stop the traces are masked or meaningless.
+%
+%   Zero-drop trials have no meaningful stop, so their window is the full
+%   available span instead.
 
-    s  = struct('t_ms',[], 'z',[], 'v',[], 'ag',[]);
-    ok = false;
+    s = [];
     if ~isfile(kinPath), return; end
     try
         L = load(kinPath, 'kin');
@@ -307,24 +370,64 @@ function [s, ok] = local_load_series(kinPath, preCapMs)
     kin = L.kin;
     if ~all(isfield(kin, {'t_s','z','v','a','stopFrame'})), return; end
 
-    n   = numel(kin.t_s);
-    idx = (1:n).' <= kin.stopFrame & kin.t_s(:) >= -preCapMs/1000;
+    n = numel(kin.t_s);
+    if isZeroDrop
+        idx = true(n,1);
+    else
+        idx = (1:n).' <= kin.stopFrame;
+    end
+    idx = idx & kin.t_s(:) >= -preCapMs/1000;
     if ~any(idx), return; end
 
+    s = struct();
     s.t_ms = kin.t_s(idx) * 1000;
     s.z    = kin.z(idx);
     s.v    = kin.v(idx);
-    % Recomputed as g - a from the raw trace, never read from kin.a_plus_g:
-    % pre-2026-08 files carry the old formula in that column. Still NaN before
-    % impact, since kd_kinematics masks a outside [impact, stop].
     ag     = net_accel(kin);
     s.ag   = ag(idx);
-    ok = true;
+end
+
+function [m, n] = local_mean_on_grid(T, field, grid, minRep)
+%LOCAL_MEAN_ON_GRID  Replicate mean at each grid point, with a coverage floor.
+%
+%   Each replicate is interpolated onto the grid with NaN outside its own span,
+%   so a trial contributes only where it actually has data. Points covered by
+%   fewer than minRep replicates are NaN: the curve terminates rather than
+%   trailing off into a one-trial extrapolation, and no trial is ever padded
+%   with its final value.
+
+    Y = nan(numel(grid), numel(T));
+    for j = 1:numel(T)
+        t = T{j}.t_ms;
+        y = T{j}.(field);
+        ok = isfinite(t) & isfinite(y);
+        if nnz(ok) < 2, continue; end
+        % 'linear' with NaN fill: outside a replicate's span it contributes
+        % nothing, which is what makes the coverage count meaningful.
+        Y(:,j) = interp1(t(ok), y(ok), grid, 'linear', NaN);
+    end
+    n = sum(~isnan(Y), 2);
+    m = mean(Y, 2, 'omitnan');
+    m(n < minRep) = NaN;
+end
+
+function cmap = local_colormap(nLevels)
+%LOCAL_COLORMAP  Perceptually ordered rainbow; turbo, or parula where absent.
+    if exist('turbo', 'file') == 2 || exist('turbo', 'builtin') == 5
+        cmap = turbo(nLevels);
+    else
+        % turbo is R2020b+. parula keeps the figure readable on older MATLAB
+        % rather than erroring on a colormap name.
+        warning('fig_kinematics:noTurbo', ...
+            'turbo() unavailable; falling back to parula.');
+        cmap = parula(nLevels);
+    end
 end
 
 function col = local_v0_color(v0, clim, cmap)
 %LOCAL_V0_COLOR  Map one v0 onto the shared colormap.
     f = (v0 - clim(1)) / (clim(2) - clim(1));
+    if ~isfinite(f), f = 0; end
     f = min(max(f, 0), 1);
     col = cmap(1 + round(f * (size(cmap,1) - 1)), :);
 end
