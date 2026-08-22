@@ -381,6 +381,7 @@ written back, and no fit sees any of it:
 | curve terminates at the height's **median replicate `t_stop`** — the same endpoint in all three panels | all rows |
 | `movmean` per row (`SmoothMs`: depth 1.0 ms, v 2.0 ms, a+g 1.5 ms), applied AFTER aggregation; NaN-aware, with the pre-smoothing NaN mask re-applied afterward | each row independently |
 | **edge-preserving** smoothing — window half-width = distance to the edge of the finite support, so the first and last samples are returned unchanged and the window stays symmetric | `a + g` only |
+| draw the computed median only where **support ≥ `MinReplicates`**, cutting the thin-support tail. Not a clamp: nothing is floored at `g` | `a + g` only |
 | prepend a leading segment from `(t = 0, a + g = 0)` to the first computed sample — the free-fall boundary state | `a + g` only |
 | append one final segment from the last computed value down to `a + g = g` at the unified stop — the rest boundary state | `a + g` only |
 | on the default linear axis, nothing is masked or clipped. Under `'AccelScale','log'` only, mask `a + g <= AccelYMin` to NaN, since a log axis cannot render non-positive values | `a + g` only |
@@ -476,6 +477,33 @@ The three panels do **not** share a *start*, and are not meant to: depth and
 velocity begin at `-PreCapMs`, `a + g` at its free-fall anchor at `t = 0`. The
 assertion is on endpoints only, deliberately.
 
+**The `a + g` tail is support-gated.** Depth and velocity are rest-extended, so
+every replicate contributes at every grid point. `a + g` is not — the pipeline
+computes no post-stop acceleration — so past the earliest replicate stop the
+pointwise median is taken over fewer and fewer trials, until it is wandering
+over two or three. That produced a dip to ~665 cm/s², *below* `g`, just before
+a terminal drop: not physics, a median with almost nothing left in it.
+
+The computed curve is therefore drawn only where **support ≥ `MinReplicates`**
+— the same threshold that already decides whether a height is plotted at all —
+and the terminal segment runs from that last well-supported sample to
+`(unified stop, g)`. The unified stop is unchanged, so the endpoint assertion
+is unaffected. The gate always removes a contiguous **tail**, never a mid-curve
+hole: after impact each trial contributes over `[0, its own stop]`, so the
+count is non-increasing in `t`. It is applied to the aggregate *before*
+smoothing, so the smoother's trailing edge sits at the gate rather than
+reaching past it into samples that will not be drawn.
+
+**This is a gate, not a floor.** Nothing is clamped to `g` anywhere. `a + g`
+below `g` mid-penetration is real — the grains are decelerating the rod less
+than gravity accelerates it — and those values are preserved exactly. Only the
+thin-support tail is removed. `'Diagnose', true` prints each height's cut time
+and the gap from there to the unified stop.
+
+The `'trials'` QA style applies **no** gate: a single trial has support 1
+everywhere, so the ensemble threshold would blank the entire row in the one
+view whose purpose is showing what an individual trial recorded.
+
 **Why the `a + g` row alone is smoothed edge-preserving.** `movmean`'s
 `'shrink'` rule truncates the window at a boundary but still averages about
 half a window there. Depth and velocity begin `PreCapMs` before impact, where
@@ -490,12 +518,32 @@ symmetric, so nothing is phase-shifted. `'Diagnose', true` asserts the first
 `a + g` sample equals the aggregate's.
 
 **Colour is one global `v0` scale across all three geometries.** The range is
-computed once over every retained height of every model and handed unchanged to
-each figure, so the same physical `v0` is the same colour in Default, Tight and
-Wide. Zero-drop curves are excluded from the range even when drawn: their `v0`
-is 0 by quarantine rather than by measurement, so including it would anchor the
-scale at zero and compress every real curve into the top of the colormap. The
-range is printed in the run summary and returned as `R.clim`.
+computed once and handed unchanged to each figure, so the same physical `v0` is
+the same colour in Default, Tight and Wide. Zero-drop curves are excluded from
+the range even when drawn: their `v0` is 0 by quarantine rather than by
+measurement, so including it would anchor the scale at zero and compress every
+real curve into the top of the colormap.
+
+It is derived from the **full loaded set, before the `'Models'` filter** — not
+from the curves that were built. That distinction is the fix for a real defect:
+`fig_kinematics` filters its table by `'Models'` immediately after loading, so
+a range taken from the built curves was a property of the *invocation*, not of
+the dataset. Drawing all three geometries in one call gave one mapping;
+regenerating a single geometry on its own — the natural way to redraw one
+figure — gave another. Nothing was wrong inside the per-model loop; the range
+handed to it was already wrong.
+
+The range is reproduced without loading any traces: group the full set by
+`(model, height)`, take the median `v0` per group, keep groups with at least
+`MinReplicates` trials. That group set is a slight *superset* of the curves
+actually drawn — a group can clear the threshold here and still lose its curve
+if a trial proves unreadable — which can only widen the range a little, and
+widens it identically on every run.
+
+The range is printed in the run summary and returned as `R.clim`, and each
+figure's low/high `v0` → colormap index is printed under `colour check` so the
+claim is verifiable from the log: the same `v0` must print the same index in
+every figure, and every line must quote the same `clim`.
 
 **Style.** A **black** dashed vertical line at `t = 0` in every panel —
 impact is the reference the whole figure is drawn against, so it is not light
