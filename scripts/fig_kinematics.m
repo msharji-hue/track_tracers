@@ -35,6 +35,13 @@ function R = fig_kinematics(varargin)
 %       'IntrusionThreshCm' zero-drop depth-range threshold for an individual
 %                           overlay (default 0.1 cm; only used when
 %                           ShowZeroDrop is true)
+%       'ColorBy'           'height' (default) | 'v0'. What the curve colour
+%                           encodes. 'height' ranks the nominal drop height on
+%                           the ladder shared by all three geometries, so the
+%                           three figures step through identical colours by
+%                           construction. 'v0' maps the median impact speed
+%                           through one shared range. Neither touches the
+%                           measured v0, which is the velocity panel's data.
 %       'Layout'            'per-model' (default) | 'grid3x3'
 %       'Style'             'mean' (default) | 'trials' (QA)
 %       'Diagnose'          print per-height diagnostics (default false)
@@ -106,6 +113,14 @@ function R = fig_kinematics(varargin)
 %   discontinuity -- how much net upward acceleration the grains were still
 %   supplying when the rod stopped -- against a dotted reference line at g.
 %
+%   VELOCITY IS ANCHORED THE SAME WAY, to its own rest value. At the unified
+%   stop the median v ends small-POSITIVE by construction -- about half the
+%   replicates are already at rest at 0 there and the rest are still moving,
+%   so the median sits just above zero -- and a final segment to (stop, 0)
+%   closes that. Same helper, same endpoint. Unlike the a+g drop, this one
+%   carries no physical content: it removes a construction artefact rather
+%   than displaying a measured discontinuity.
+%
 %   The terminal segment ends at the SAME t as the depth and velocity curves
 %   (one stop per height per geometry, shared by that figure's three panels)
 %   and nothing is drawn past it. The three panels do NOT share a start, and
@@ -137,15 +152,48 @@ function R = fig_kinematics(varargin)
 %   samples are returned unchanged and the window stays symmetric -- nothing
 %   is phase-shifted. 'Diagnose' asserts the first sample is untouched.
 %
-%   COLOUR is one global v0 scale over every retained height of every model,
-%   so the same physical v0 is the same colour in Default, Tight and Wide.
-%   It is derived from the FULL loaded set, before the 'Models' filter, so it
-%   cannot depend on which geometries a given call happens to draw --
-%   regenerating one figure on its own must not remap it. Zero-drop curves are
-%   excluded from the range: their v0 is 0 by quarantine rather than by
-%   measurement, and including it would anchor the scale at zero. The range is
-%   printed in the run summary, and each figure's low/high v0 -> colormap
-%   index is printed so the claim is checkable from the log.
+%   COLOUR ('ColorBy') encodes one of two things, through a reference built
+%   ONCE from the FULL loaded set, before the 'Models' filter -- so it cannot
+%   depend on which geometries a given call happens to draw. Regenerating one
+%   figure on its own must not remap it.
+%
+%     'height' (default)  the rung of the nominal drop height on the ladder
+%                         shared by all three geometries: 25 mm coldest,
+%                         365 mm warmest. Because the index is a RANK on a
+%                         fixed ladder, the three figures step through
+%                         identical colours by construction, whatever v0 each
+%                         geometry happened to reach at a given height.
+%     'v0'                median impact speed through one shared range, the
+%                         earlier behaviour, retained unchanged.
+%
+%   Nothing about this modifies a measured v0. It remains the plotted data in
+%   the velocity panel, the medV0 on every curve, and the number every
+%   analysis uses. Zero-drop curves are excluded from both references: their
+%   v0 is 0 by quarantine rather than by measurement, which would anchor the
+%   v0 scale at zero and put a phantom rung at the foot of the ladder.
+%
+%   The reference is printed in the run summary, and each figure's extreme
+%   curves are printed as (height or v0) -> colormap index, so the shared-
+%   reference claim is checkable from the log alone.
+%
+%   SUPPORT GATES AT BOTH ENDS. A row is drawn only where at least
+%   MinReplicates replicates contribute to it, the same threshold that decides
+%   whether a height is plotted at all.
+%
+%   Before impact this applies to ALL THREE rows. Trials carry different
+%   amounts of pre-impact recording -- Stage A's window starts where the red
+%   markers appear -- so the pointwise median steps as the contributing set
+%   changes, which is the kink that was visible in the Default velocity curve
+%   near -5 ms. It is an artefact of who is in the average, not of the motion.
+%
+%   After impact only a+g needs it, and the reason is below. Depth and
+%   velocity are rest-extended, so their support is full there by
+%   construction.
+%
+%   Neither gate can punch an interior hole: support is non-increasing away
+%   from t = 0 in both directions -- going back, a trial drops out at the
+%   start of its own recording; going forward, at its own stop -- so each gate
+%   can only trim a contiguous head or tail.
 %
 %   THE a+g TAIL IS SUPPORT-GATED. a+g is never rest-extended, so past the
 %   earliest replicate stop the pointwise median is taken over fewer and fewer
@@ -176,6 +224,7 @@ opt.ShowZeroDrop       = false;
 opt.IntrusionThreshCm  = 0.1;
 opt.Layout             = 'per-model';
 opt.Style              = 'mean';
+opt.ColorBy            = 'height';
 opt.Diagnose           = false;
 opt.OutDir             = '';
 opt.Save               = true;
@@ -201,6 +250,11 @@ opt.AccelScale = lower(char(opt.AccelScale));
 if ~ismember(opt.AccelScale, {'linear','log'})
     error('fig_kinematics:badAccelScale', ...
           'AccelScale must be ''linear'' or ''log'', got "%s".', opt.AccelScale);
+end
+opt.ColorBy = lower(char(opt.ColorBy));
+if ~ismember(opt.ColorBy, {'height','v0'})
+    error('fig_kinematics:badColorBy', ...
+          'ColorBy must be ''height'' or ''v0'', got "%s".', opt.ColorBy);
 end
 if ~isstruct(opt.SmoothMs) || ~all(isfield(opt.SmoothMs, {'z','v','ag'}))
     error('fig_kinematics:badSmoothMs', ...
@@ -233,6 +287,7 @@ fprintf('  AccelYMin         : %g cm/s^2 (log-axis floor)\n', opt.AccelYMin);
 fprintf('  AccelScale        : %s%s\n', opt.AccelScale, ...
         local_tern(strcmp(opt.AccelScale,'log'), ...
                    sprintf(' (floor %g cm/s^2)', opt.AccelYMin), ''));
+fprintf('  ColorBy           : %s\n', opt.ColorBy);
 fprintf('  ShowZeroDrop      : %s\n', local_tern(opt.ShowZeroDrop,'yes','no'));
 fprintf('  OutDir            : %s\n', opt.OutDir);
 
@@ -242,7 +297,7 @@ fprintf('  OutDir            : %s\n', opt.OutDir);
 % never the table's (quarantined) t_stop_s column.
 % KAll is the FULL loaded set, every model, kept in scope on purpose: the
 % shared colour range is derived from it rather than from the models this
-% invocation happens to draw. See local_global_v0_range.
+% invocation happens to draw. See local_global_color_ref.
 KAll = load_kinematics_set(root);
 K    = KAll(ismember(KAll.model, opt.Models), :);
 if isempty(K)
@@ -315,16 +370,23 @@ if opt.Diagnose
     local_diagnose(C, opt);
 end
 
-% ── shared colour scale: ONE global v0 range over every geometry ─────────
+% ── shared colour reference, ONE for every geometry ──────────────────────
 % Derived from KAll -- the full loaded set, BEFORE the 'Models' filter -- so
-% the range is a property of the dataset, not of which figures this call is
-% drawing. Computed once, here, and handed unchanged to every figure.
-[CLIM, nRefCurves] = local_global_v0_range(KAll, opt);
-CMAP  = local_colormap(256);
-fprintf(['  shared v0 colour scale : %.1f - %.1f cm/s over %d (model, height) ' ...
-         'group(s)\n                          across ALL geometries, ' ...
-         'independent of the Models option\n'], ...
-        CLIM(1), CLIM(2), nRefCurves);
+% it is a property of the dataset, not of which figures this call is drawing.
+% Computed once, here, and handed unchanged to every figure.
+REF  = local_global_color_ref(KAll, opt);
+CMAP = local_colormap(256);
+if strcmp(opt.ColorBy, 'height')
+    fprintf(['  colour by             : nominal drop height, %d rungs ' ...
+             '%g - %g mm\n                          (shared ladder; ' ...
+             'measured v0 is unchanged and is the v panel)\n'], ...
+            numel(REF.ladder), min(REF.ladder), max(REF.ladder));
+else
+    fprintf(['  colour by             : median v0, %.1f - %.1f cm/s over ' ...
+             '%d (model, height) group(s)\n                          ' ...
+             'across ALL geometries, independent of the Models option\n'], ...
+            REF.clim(1), REF.clim(2), REF.nGroups);
+end
 
 % ── shared axis limits, computed once across every model and row ─────────
 LIMS = local_shared_limits(C, O, opt);
@@ -350,8 +412,8 @@ fprintf('\n--- colour check (v0 -> colormap index, %d levels) ---\n', size(CMAP,
 if strcmp(opt.Layout, 'per-model')
     for c = 1:nCol
         if ~any([C.model] == opt.Models(c)), continue; end
-        local_print_color_check(opt.Models(c), C, CLIM, CMAP);
-        f = local_draw_one_model(opt.Models(c), C, O, CLIM, CMAP, LIMS, opt);
+        local_print_color_check(opt.Models(c), C, REF, CMAP, opt);
+        f = local_draw_one_model(opt.Models(c), C, O, REF, CMAP, LIMS, opt);
         figs.(matlab.lang.makeValidName(char(opt.Models(c)))) = f;
         if opt.Save
             stem = sprintf('fig1_kinematics_%s', lower(char(opt.Models(c))));
@@ -360,9 +422,9 @@ if strcmp(opt.Layout, 'per-model')
     end
 else % grid3x3
     for c = 1:nCol
-        local_print_color_check(opt.Models(c), C, CLIM, CMAP);
+        local_print_color_check(opt.Models(c), C, REF, CMAP, opt);
     end
-    fg = local_draw_grid3x3(opt.Models, C, O, CLIM, CMAP, LIMS, opt);
+    fg = local_draw_grid3x3(opt.Models, C, O, REF, CMAP, LIMS, opt);
     figs.grid3x3 = fg;
     if opt.Save
         written = [written; ...
@@ -385,7 +447,9 @@ fprintf('\n');
 R = struct();
 R.curves   = C;
 R.overlays = O;
-R.clim     = CLIM;
+R.colorBy  = opt.ColorBy;
+R.clim     = REF.clim;         % v0 range; populated in both modes
+R.ladder   = REF.ladder;       % shared height ladder; populated in both modes
 R.limits   = LIMS;
 R.written  = written;
 R.figures  = figs;
@@ -571,6 +635,33 @@ function [C, O] = local_build_ensembles(K, opt)
         agThin = na < opt.MinReplicates;
         aRaw(agThin) = NaN;
 
+        % ── PRE-IMPACT SUPPORT GATE, all three rows ──────────────────────
+        % The same rule, applied to the other end. Trials do not all carry the
+        % same amount of pre-impact recording: Stage A's window starts where
+        % the red markers appear, so at -10 ms a height may have three trials
+        % contributing where at -2 ms it has ten. The pointwise median then
+        % steps as the contributing SET changes, which is the kink visible in
+        % the Default velocity curve around -5 ms. It is an artefact of who is
+        % in the average, not a feature of the motion.
+        %
+        % So each row is drawn before impact only where at least
+        % MinReplicates trials contribute -- its OWN support count, since the
+        % three rows need not thin out together.
+        %
+        % Like the tail gate, this can only trim a contiguous HEAD and can
+        % never punch an interior hole: going backwards from t = 0 a trial
+        % drops out at the start of its own recording and never returns, so
+        % the count is non-increasing away from impact in this direction too.
+        %
+        % Post-impact needs no such gate on depth and velocity: the rest
+        % extension makes every replicate contribute at every point after its
+        % onset, so their support is full there by construction. a+g is the
+        % exception and is gated over the whole grid, above.
+        pre = grid < 0;
+        zRaw(pre & nz < opt.MinReplicates) = NaN;
+        vRaw(pre & nv < opt.MinReplicates) = NaN;
+        aRaw(pre & na < opt.MinReplicates) = NaN;
+
         zC = local_smooth_row(zRaw, opt.GridMs, opt.SmoothMs.z,  medStopMs, 'depth');
         vC = local_smooth_row(vRaw, opt.GridMs, opt.SmoothMs.v,  medStopMs, 'v');
         % edgePreserve for a+g only: its support starts AT impact, on the
@@ -593,7 +684,7 @@ function [C, O] = local_build_ensembles(K, opt)
         gRest = median(cellfun(@(s) s.g_cm_s2, loaded));
 
         % Where the gated computed curve stops, and therefore where the
-        % terminal segment starts. local_ag_terminal takes the last finite
+        % terminal segment starts. local_rest_terminal takes the last finite
         % sample, so gating aRaw above is all it takes for the segment to run
         % from the last well-supported value to (tEndMs, g) -- the unified
         % stop is unchanged, and so is the endpoint assertion.
@@ -601,8 +692,22 @@ function [C, O] = local_build_ensembles(K, opt)
         iGate = find(isfinite(aC), 1, 'last');
         if ~isempty(iGate), agGateMs = grid(iGate); end
 
-        [agTermT, agTermY] = local_ag_terminal(grid, aC, tEndMs, gRest);
+        % Both rows are anchored to their rest value at the unified stop, by
+        % the same helper: a+g to g, v to 0. See local_rest_terminal.
+        [agTermT, agTermY] = local_rest_terminal(grid, aC, tEndMs, gRest);
+        [vTermT,  vTermY]  = local_rest_terminal(grid, vC, tEndMs, 0);
         [agOnsT, agOnsY]   = local_ag_onset(grid, aC);
+
+        % Where each row's drawn curve begins, after the pre-impact gate.
+        % Reported by Diagnose beside the tail cut. A numeric triple rather
+        % than a nested struct, for the reason local_interior_nan gives.
+        preCutMs = [local_first_t(grid, zC), local_first_t(grid, vC), ...
+                    local_first_t(grid, aC)];
+
+        % Sub-g dip evidence, gathered here because it needs the per-replicate
+        % matrix A, which Diagnose never sees. Numeric quadruple, not a nested
+        % struct, for the reason local_interior_nan gives.
+        dipInfo = local_dip_evidence(grid, aC, A, gRest);
 
         % At the endpoint every replicate contributes (rest-extended), while
         % only about half are still in their measured phase -- which is exactly
@@ -628,9 +733,13 @@ function [C, O] = local_build_ensembles(K, opt)
             'agRaw',        aRaw, ...
             'tEndMs',       tEndMs, ...
             'agGateMs',     agGateMs, ...
+            'preCutMs',     preCutMs, ...
+            'dipInfo',      dipInfo, ...
             'gRest',        gRest, ...
             'agTermT',      agTermT, ...
             'agTermY',      agTermY, ...
+            'vTermT',       vTermT, ...
+            'vTermY',       vTermY, ...
             'agOnsetT',     agOnsT, ...
             'agOnsetY',     agOnsY, ...
             't_ms', grid, 'z', zC, 'v', vC, 'ag', aC);   %#ok<AGROW>
@@ -646,6 +755,7 @@ function [C, O] = local_build_ensembles(K, opt)
                 vO = local_smooth_row(Tj.v, opt.GridMs, opt.SmoothMs.v, medStopMs, 'v (overlay)');
                 zO(past) = NaN;  vO(past) = NaN;
                 O(end+1) = struct('model', K.model(rowsOk(j)), ...
+                    'height', K.dropHeight_mm(rowsOk(j)), ...
                     'medV0', median(K.v0_cm_s(rowsOk), 'omitnan'), ...
                     't_ms', grid, 'z', zO, 'v', vO); %#ok<AGROW>
             end
@@ -680,9 +790,15 @@ function C = local_build_trials(K, opt)
         % This view's endpoint is the trial's OWN last drawn sample, since it
         % ends at its own stop rather than at an ensemble one. Same terminal
         % rest segment, same rule.
+        % No pre-impact gate either, for the same reason, so preCutMs is just
+        % where each row's data happens to start. No sub-g dip statistics: the
+        % evidence is a fraction OF REPLICATES, and there is one trial here.
         tEndMs = t(end);
-        [agTermT, agTermY] = local_ag_terminal(t, aC, tEndMs, s.g_cm_s2);
+        [agTermT, agTermY] = local_rest_terminal(t, aC, tEndMs, s.g_cm_s2);
+        [vTermT,  vTermY]  = local_rest_terminal(t, vC, tEndMs, 0);
         [agOnsT,  agOnsY]  = local_ag_onset(t, aC);
+        preCutMs = [local_first_t(t, zC), local_first_t(t, vC), ...
+                    local_first_t(t, aC)];
 
         C(end+1) = struct( ...                                    %#ok<AGROW>
             'model',        K.model(i), ...
@@ -701,9 +817,13 @@ function C = local_build_trials(K, opt)
             'agRaw',        s.ag(idx), ...
             'tEndMs',       tEndMs, ...
             'agGateMs',     NaN, ...
+            'preCutMs',     preCutMs, ...
+            'dipInfo',      [NaN NaN NaN 0], ...
             'gRest',        s.g_cm_s2, ...
             'agTermT',      agTermT, ...
             'agTermY',      agTermY, ...
+            'vTermT',       vTermT, ...
+            'vTermY',       vTermY, ...
             'agOnsetT',     agOnsT, ...
             'agOnsetY',     agOnsY, ...
             't_ms', t, 'z', zC, 'v', vC, 'ag', aC);
@@ -747,35 +867,92 @@ function [tSeg, ySeg] = local_ag_onset(tAxis, ag)
     ySeg = [0;      ag(i)];
 end
 
-function [tSeg, ySeg] = local_ag_terminal(tAxis, ag, tEndMs, g)
-%LOCAL_AG_TERMINAL  The measured rest state, as one final a+g segment.
+function [tSeg, ySeg] = local_rest_terminal(tAxis, y, tEndMs, yRest)
+%LOCAL_REST_TERMINAL  The rest state, appended as one final segment.
 %
-%   At rest the bed carries the rod's weight: a = 0, so a + g = g exactly.
-%   That is a MEASURED state, not an extrapolation and not a fabricated datum.
-%   The pipeline simply computes no acceleration past stopFrame -- kd_kinematics
-%   masks a outside [impact_index, stopFrame] -- which is why the aggregate has
-%   nothing there to plot, and why without this segment the a+g curve just stops
-%   in mid-air at whatever value it last held.
+%   Used by two rows, with the rest value each one takes at the stop:
 %
-%   The segment runs from the last computed a+g value to g at tEndMs. The
-%   visible drop across it is the per-height acceleration discontinuity: how
-%   much net upward acceleration the grains were still supplying at the instant
-%   the rod stopped. That the rod stops while a + g is still far above g is a
-%   real feature of these traces, not a plotting artefact.
+%       a + g  ->  g     at rest the bed carries the rod's weight, a = 0
+%       v      ->  0     at rest the rod is not moving
 %
-%   tEndMs is the caller's UNIFIED endpoint -- the same t at which that
-%   height's depth and velocity curves end. The segment therefore terminates
-%   exactly where the other two panels do, and nothing is drawn past it. When
-%   the last computed sample already sits at tEndMs the segment is vertical,
-%   which is the sharp terminal drop; when the a+g row happens to run out
-%   earlier it slopes down to the same endpoint instead.
+%   Both are MEASURED states, not extrapolations, and both are the one point
+%   after the stop that is known rather than guessed. Neither row reaches its
+%   rest value on its own: the pipeline computes no acceleration past
+%   stopFrame, so a+g simply ends wherever it last had support; and the
+%   velocity median ends SMALL-POSITIVE by construction, because at the
+%   ensemble stop about half the replicates are already at rest at 0 and the
+%   rest are still moving, so the median sits just above zero. Anchoring
+%   removes that construction artefact rather than hiding a real residual
+%   velocity.
+%
+%   The drop across the a+g segment carries physical content -- it is the
+%   measured stopping discontinuity, how much net upward acceleration the
+%   grains were still supplying at the instant the rod stopped. The drop
+%   across the v segment does not; it is closing a median artefact.
+%
+%   tEndMs is the caller's UNIFIED endpoint -- the same t at which every panel
+%   of that height ends. The segment therefore terminates exactly where the
+%   others do, and nothing is drawn past it. When the last computed sample
+%   already sits at tEndMs the segment is vertical, which is the sharp
+%   terminal drop; when the row ran out earlier (the a+g support gate) it
+%   slopes down to the same endpoint instead.
     tSeg = [];  ySeg = [];
-    if ~isfinite(tEndMs) || ~isfinite(g), return; end
-    i = find(isfinite(ag), 1, 'last');
+    if ~isfinite(tEndMs) || ~isfinite(yRest), return; end
+    i = find(isfinite(y), 1, 'last');
     if isempty(i), return; end
     if tAxis(i) > tEndMs, return; end        % nothing to append past the stop
     tSeg = [tAxis(i); tEndMs];
-    ySeg = [ag(i);    g];
+    ySeg = [y(i);     yRest];
+end
+
+function t = local_first_t(tAxis, y)
+%LOCAL_FIRST_T  The time of a row's first finite sample; NaN if it has none.
+%   The counterpart of local_last_t, for reporting where the pre-impact
+%   support gate cut each row.
+    t = NaN;
+    i = find(isfinite(y), 1, 'first');
+    if ~isempty(i), t = tAxis(i); end
+end
+
+function info = local_dip_evidence(grid, ag, A, g)
+%LOCAL_DIP_EVIDENCE  Replicate-level evidence for a post-impact sub-g dip.
+%
+%   Returns [tMs, value, fractionAbove, n]:
+%       tMs            time of the deepest post-impact point of the drawn a+g
+%       value          a+g there
+%       fractionAbove  fraction of the replicates CONTRIBUTING at that point
+%                      whose own a > 0, i.e. whose own a+g < g
+%       n              how many replicates contributed there
+%   All NaN (n = 0) when the curve never dips below g after impact.
+%
+%   WHY THIS IS NOT A DEFECT TO BE FIXED. a + g = g - a, so a + g < g means
+%   simply a > 0: the rod is still accelerating downward, because the grain
+%   force on it is momentarily less than its own weight. That is ordinary
+%   during penetration and must be preserved exactly -- nothing here clamps
+%   or floors a+g.
+%
+%   What WOULD be a defect is the median dipping below g while most of its
+%   replicates sit above it, which is the signature of an aggregate driven by
+%   one or two outliers rather than by the population. So the fraction is
+%   reported, and Diagnose flags it below 0.7. This is deliberately a
+%   diagnostic and not a filter: it decides nothing about what is drawn.
+%
+%   Read from the PER-REPLICATE matrix, before smoothing or gating -- the
+%   question is what the trials did, not what the display did to them.
+    info = [NaN NaN NaN 0];
+    idx = find(grid >= 0 & isfinite(ag));
+    if isempty(idx) || ~isfinite(g), return; end
+
+    [val, k] = min(ag(idx));
+    i = idx(k);
+    if ~(val < g), return; end               % no sub-g dip: nothing to report
+
+    col = A(i, :);
+    contrib = isfinite(col);
+    n = sum(contrib);
+    if n == 0, return; end
+
+    info = [grid(i), val, sum(col(contrib) < g) / n, n];
 end
 
 function C = local_empty_curve()
@@ -783,13 +960,14 @@ function C = local_empty_curve()
                'nMax',{}, 'medStopMs',{}, 'tStopMinMs',{}, 'tStopMaxMs',{}, ...
                'supportAtEnd',{}, 'supportMeasAtEnd',{}, 'oldRuleEndMs',{}, ...
                'nShortRec',{}, 'interiorNaN',{}, 'agRaw',{}, ...
-               'tEndMs',{}, 'agGateMs',{}, 'gRest',{}, 'agTermT',{}, 'agTermY',{}, ...
-               'agOnsetT',{}, 'agOnsetY',{}, ...
+               'tEndMs',{}, 'agGateMs',{}, 'preCutMs',{}, 'dipInfo',{}, ...
+               'gRest',{}, 'agTermT',{}, 'agTermY',{}, ...
+               'vTermT',{}, 'vTermY',{}, 'agOnsetT',{}, 'agOnsetY',{}, ...
                't_ms',{}, 'z',{}, 'v',{}, 'ag',{});
 end
 
 function O = local_empty_overlay()
-    O = struct('model',{}, 'medV0',{}, 't_ms',{}, 'z',{}, 'v',{});
+    O = struct('model',{}, 'height',{}, 'medV0',{}, 't_ms',{}, 'z',{}, 'v',{});
 end
 
 % ═════════════════════════════════════════════════════════════════════════
@@ -973,16 +1151,47 @@ function local_diagnose(C, opt)
         % much of the interval to the unified stop the terminal segment then
         % spans. A large gap means a long thin-support tail was removed -- the
         % wandering few-replicate median that dipped below g.
-        fprintf('\n    a+g support gate (support >= %d):\n', opt.MinReplicates);
+        fprintf('\n    support gates (support >= %d), per height:\n', ...
+                opt.MinReplicates);
+        fprintf(['      %5s  %-28s  %s\n'], 'h(mm)', ...
+                'pre-impact cut  z / v / a+g', 'a+g tail cut -> unified stop');
         for q = sel
-            if ~isfinite(C(q).agGateMs)
-                fprintf('      h = %4g mm : no gate applied\n', C(q).height);
-                continue
+            pc = C(q).preCutMs;
+            if isfinite(C(q).agGateMs)
+                tailStr = sprintf('%7.2f -> %7.2f ms (gap %5.2f)', ...
+                    C(q).agGateMs, C(q).tEndMs, C(q).tEndMs - C(q).agGateMs);
+            else
+                tailStr = 'no gate applied';
             end
-            fprintf(['      h = %4g mm : computed a+g ends %7.2f ms, ' ...
-                     'unified stop %7.2f ms (gap %5.2f ms)\n'], ...
-                    C(q).height, C(q).agGateMs, C(q).tEndMs, ...
-                    C(q).tEndMs - C(q).agGateMs);
+            fprintf('      %5g  %7.2f /%7.2f /%7.2f      %s\n', ...
+                    C(q).height, pc(1), pc(2), pc(3), tailStr);
+        end
+        fprintf(['      pre-impact cut = where each row starts once thin-support\n' ...
+                 '      leading samples are dropped; the rows need not agree.\n']);
+
+        % Sub-g dips: evidence, not a correction. a + g < g means a > 0, the
+        % grain force momentarily below the foot's weight, which is ordinary
+        % during penetration. What would NOT be ordinary is the median dipping
+        % below g while most of its own replicates stay above it -- an
+        % aggregate driven by one or two outliers. Hence the fraction.
+        anyDip = false;
+        for q = sel
+            d = C(q).dipInfo;
+            if ~isfinite(d(2)), continue; end
+            if ~anyDip
+                fprintf('\n    sub-g dips (a+g < g after impact; a > 0 is physical):\n');
+                anyDip = true;
+            end
+            flag = '';
+            if isfinite(d(3)) && d(3) < 0.70
+                flag = '   <-- FLAG: below 0.70, dip may be outlier-driven';
+            end
+            fprintf(['      h = %4g mm : min a+g %8.1f at %7.2f ms; ' ...
+                     '%.0f%% of %d contributing replicates have a > 0%s\n'], ...
+                    C(q).height, d(2), d(1), 100*d(3), d(4), flag);
+        end
+        if ~anyDip
+            fprintf('\n    sub-g dips: none (no curve falls below g after impact)\n');
         end
 
         % Continuity: after rest-filling to the grid end, every ensemble curve
@@ -1014,8 +1223,15 @@ function local_diagnose(C, opt)
         % must never be widened into a startpoint check.
         badEnd = false;
         for q = sel
+            % Where each row is actually LAST DRAWN: for the two anchored rows
+            % that is the end of their terminal segment, not the end of the
+            % computed series, which the a+g support gate may cut earlier.
             tz = local_last_t(C(q).t_ms, C(q).z);
-            tv = local_last_t(C(q).t_ms, C(q).v);
+            if ~isempty(C(q).vTermT)
+                tv = C(q).vTermT(end);
+            else
+                tv = local_last_t(C(q).t_ms, C(q).v);
+            end
             if ~isempty(C(q).agTermT)
                 ta = C(q).agTermT(end);
             else
@@ -1141,7 +1357,7 @@ function LIMS = local_shared_limits(C, O, opt)
     if ~isempty(O), zAll = [zAll; vertcat(O.z)]; end
     YL_z = local_pad_ylim(zAll, MARGIN);
 
-    vAll = vertcat(C.v);
+    vAll = [vertcat(C.v); vertcat(C.vTermY)];
     if ~isempty(O), vAll = [vAll; vertcat(O.v)]; end
     YL_v = local_pad_ylim(vAll, MARGIN);
     YL_v(1) = 0;                 % velocity floor is zero: nothing below rest
@@ -1192,75 +1408,118 @@ function yl = local_log_ylim(vals, floorVal)
     yl = [floorVal, hi];
 end
 
-function [clim, nGroups] = local_global_v0_range(KAll, opt)
-%LOCAL_GLOBAL_V0_RANGE  The one v0 range every figure's colours map through.
+function REF = local_global_color_ref(KAll, opt)
+%LOCAL_GLOBAL_COLOR_REF  The one colour reference every figure maps through.
 %
-%   THE BUG THIS FIXES. The range used to be taken from the curves that had
-%   actually been built, and those exist only for the models in 'Models'
-%   (fig_kinematics filters K by it right after loading). So the range was a
-%   property of the invocation, not of the dataset: drawing all three
-%   geometries in one call gave one mapping, and regenerating a single
+%   Returns a struct with everything both encodings need:
+%       .clim    [lo hi] median-v0 range, for ColorBy 'v0'
+%       .ladder  sorted unique drop heights, for ColorBy 'height'
+%       .nGroups how many (model, height) groups fed the two
+%
+%   THE BUG THIS FIXES (the 'v0' half). The range used to be taken from the
+%   curves that had actually been built, and those exist only for the models
+%   in 'Models' (fig_kinematics filters K by it right after loading). So the
+%   range was a property of the invocation, not of the dataset: drawing all
+%   three geometries in one call gave one mapping, and regenerating a single
 %   geometry on its own -- the natural way to redraw one figure -- gave a
 %   different one. Same physical v0, different colour, and the three figures
-%   stopped being comparable. Nothing was wrong inside the per-model loop;
-%   the range handed to it was already wrong.
+%   stopped being comparable. Nothing was wrong inside the per-model loop; the
+%   range handed to it was already wrong.
 %
-%   The fix is to compute the range from the FULL loaded set, before that
-%   filter, so it cannot depend on which models are being drawn.
+%   The fix, and the reason BOTH references are built here: they come from the
+%   FULL loaded set, before that filter, so neither can depend on which models
+%   are being drawn.
 %
-%   Reproduces each curve's medV0 without loading a single trace: group by
-%   (model, height), take the median v0 over the group, keep groups with at
-%   least MinReplicates trials. Zero-drop rows are excluded outright, whether
-%   or not they are drawn -- their v0 is 0 by quarantine rather than by
+%   Reproduces each curve's medV0 and height without loading a single trace:
+%   group by (model, height), take the median v0 over the group, keep groups
+%   with at least MinReplicates trials. Zero-drop rows are excluded outright,
+%   whether or not they are drawn -- their v0 is 0 by quarantine rather than by
 %   measurement (load_kinematics_set: no fall, so no impact speed), and
-%   including it would anchor the scale at zero and compress every real curve
-%   into the top of the colormap.
+%   including it would anchor the v0 scale at zero and put a phantom rung at
+%   the bottom of the height ladder.
 %
 %   The group set is a SUPERSET of the curves that end up drawn: a group can
 %   clear MinReplicates here and still lose its curve later if a trial proves
-%   unreadable or has no finite t_stop. That can only widen the range a little
-%   -- and widening it identically on every invocation is the property being
-%   bought.
-    clim = [0 1];  nGroups = 0;
+%   unreadable or has no finite t_stop. For 'v0' that can only widen the range
+%   slightly; for 'height' it can only add a rung no curve occupies, which
+%   shifts nothing, since a height's colour is its rank on the ladder and the
+%   ladder is the same in every figure either way. Both are stable across
+%   invocations, which is the property being bought.
+    REF = struct('clim', [0 1], 'ladder', zeros(0,1), 'nGroups', 0);
+
     R = KAll(~KAll.isZeroDrop, :);
     if isempty(R), return; end
 
     g   = findgroups(R.model, R.dropHeight_mm);
     med = splitapply(@(x) median(x, 'omitnan'), R.v0_cm_s, g);
-    cnt = splitapply(@numel, R.v0_cm_s, g);
+    hgt = splitapply(@(x) x(1),                 R.dropHeight_mm, g);
+    cnt = splitapply(@numel,                    R.v0_cm_s, g);
 
-    med = med(cnt >= opt.MinReplicates & isfinite(med));
-    if isempty(med)
+    big = cnt >= opt.MinReplicates;
+    medBig = med(big & isfinite(med));
+    hgtBig = hgt(big & isfinite(hgt));
+
+    % The ladder is the set of nominal heights, shared by every geometry: one
+    % fixed height -> colour map, so the three figures step through the same
+    % colours in the same order by construction. Heights the models do not
+    % share still occupy their own rung -- the ladder is the union, not the
+    % intersection, so a height present in only one geometry does not shift
+    % the colours of the heights around it in the others.
+    REF.ladder = unique(hgtBig(:));
+
+    if isempty(medBig)
         % No group is big enough to be plotted; fall back to the raw spread so
         % a 'trials' run still gets a sane scale.
-        med = R.v0_cm_s(isfinite(R.v0_cm_s));
+        medBig = R.v0_cm_s(isfinite(R.v0_cm_s));
+        if isempty(REF.ladder)
+            REF.ladder = unique(R.dropHeight_mm(isfinite(R.dropHeight_mm)));
+        end
     end
-    if isempty(med), return; end
+    if isempty(medBig), return; end
 
-    nGroups = numel(med);
-    clim = [min(med), max(med)];
-    if ~(diff(clim) > 0), clim = clim(1) + [0, max(1, abs(clim(1)))]; end
+    REF.nGroups = numel(medBig);
+    REF.clim = [min(medBig), max(medBig)];
+    if ~(diff(REF.clim) > 0)
+        REF.clim = REF.clim(1) + [0, max(1, abs(REF.clim(1)))];
+    end
 end
 
-function local_print_color_check(label, C, CLIM, CMAP)
-%LOCAL_PRINT_COLOR_CHECK  The v0 -> colormap index mapping actually used, for
-%   this figure's lowest- and highest-v0 curve.
+function local_print_color_check(label, C, REF, CMAP, opt)
+%LOCAL_PRINT_COLOR_CHECK  The colour mapping actually used, for this figure's
+%   extreme curves, in whichever mode is active.
 %
-%   The check the shared-range claim has to survive: run the three geometries
-%   and compare. A v0 appearing in two figures MUST print the same index in
-%   both, and the printed clim must be identical everywhere. If a figure shows
-%   a different clim, the range is being recomputed somewhere it should not be.
+%   The check the shared-reference claim has to survive: run the three
+%   geometries and compare.
+%
+%     'height'  the SAME height must print the SAME index in every figure.
+%               Because the index is a rank on a fixed shared ladder, the
+%               three figures step through identical colours by construction,
+%               and any difference here means the ladder was rebuilt.
+%     'v0'      a v0 appearing in two figures must print the same index, and
+%               every line must quote the same clim.
     inCol = find([C.model] == label);
     if isempty(inCol), return; end
-    v = [C(inCol).medV0];
-    ok = isfinite(v);
-    if ~any(ok), return; end
-    v = v(ok);
     n = size(CMAP, 1);
-    fprintf(['  %-8s  low  v0 %7.2f -> idx %3d   high v0 %7.2f -> idx %3d' ...
-             '   (clim %.2f - %.2f)\n'], label, ...
-            min(v), local_v0_index(min(v), CLIM, n), ...
-            max(v), local_v0_index(max(v), CLIM, n), CLIM(1), CLIM(2));
+
+    if strcmp(opt.ColorBy, 'height')
+        h = [C(inCol).height];
+        h = h(isfinite(h));
+        if isempty(h), return; end
+        fprintf(['  %-8s  low  h %6.4g mm -> idx %3d   high h %6.4g mm -> ' ...
+                 'idx %3d   (ladder %d rungs, %g - %g mm)\n'], label, ...
+                min(h), local_height_index(min(h), REF.ladder, n), ...
+                max(h), local_height_index(max(h), REF.ladder, n), ...
+                numel(REF.ladder), min(REF.ladder), max(REF.ladder));
+    else
+        v = [C(inCol).medV0];
+        v = v(isfinite(v));
+        if isempty(v), return; end
+        fprintf(['  %-8s  low  v0 %7.2f -> idx %3d   high v0 %7.2f -> idx ' ...
+                 '%3d   (clim %.2f - %.2f)\n'], label, ...
+                min(v), local_v0_index(min(v), REF.clim, n), ...
+                max(v), local_v0_index(max(v), REF.clim, n), ...
+                REF.clim(1), REF.clim(2));
+    end
 end
 
 function cmap = local_colormap(nLevels)
@@ -1282,14 +1541,47 @@ function idx = local_v0_index(v0, clim, nLevels)
     idx = 1 + round(f * (nLevels - 1));
 end
 
-function col = local_v0_color(v0, clim, cmap)
-    col = cmap(local_v0_index(v0, clim, size(cmap,1)), :);
+function idx = local_height_index(h, ladder, nLevels)
+%LOCAL_HEIGHT_INDEX  Nominal drop height -> colormap row, by RANK on the
+%   shared ladder rather than by value.
+%
+%   Rank, not linear interpolation of the height itself, is what makes the
+%   three geometries step through identical colours: every figure draws the
+%   same rungs in the same order, so rung r gets the same colour everywhere
+%   regardless of which heights a particular geometry happens to have. It also
+%   spreads the colormap evenly over the heights actually used instead of
+%   bunching them wherever the ladder's spacing is tight.
+%
+%   Coldest at the bottom rung, warmest at the top: 25 mm -> index 1,
+%   365 mm -> index nLevels, on the campaign ladder.
+%
+%   A height not on the ladder -- a zero-drop overlay at h = 0, which the
+%   ladder deliberately excludes -- falls to the nearest rung, so it takes the
+%   coldest colour rather than an error or a blank.
+    idx = 1;
+    if isempty(ladder) || ~isfinite(h), return; end
+    n = numel(ladder);
+    if n < 2, return; end
+    [~, r] = min(abs(ladder(:) - h));        % nearest rung; exact when on it
+    idx = 1 + round((r - 1) / (n - 1) * (nLevels - 1));
+end
+
+function col = local_curve_color(crv, REF, CMAP, opt)
+%LOCAL_CURVE_COLOR  One curve's colour, in whichever encoding is active.
+%   The single dispatch point, so the drawing and the verification printout
+%   cannot disagree about what a curve's colour is.
+    n = size(CMAP, 1);
+    if strcmp(opt.ColorBy, 'height')
+        col = CMAP(local_height_index(crv.height, REF.ladder, n), :);
+    else
+        col = CMAP(local_v0_index(crv.medV0, REF.clim, n), :);
+    end
 end
 
 % ═════════════════════════════════════════════════════════════════════════
 %  DRAWING
 % ═════════════════════════════════════════════════════════════════════════
-function fig = local_draw_one_model(model, C, O, CLIM, CMAP, LIMS, opt)
+function fig = local_draw_one_model(model, C, O, REF, CMAP, LIMS, opt)
 %LOCAL_DRAW_ONE_MODEL  Three stacked panels on a square canvas.
 %   Every panel keeps full numeric tick labels on BOTH axes -- the x labels are
 %   not blanked on the upper two. Repeating them costs a little space and
@@ -1298,9 +1590,9 @@ function fig = local_draw_one_model(model, C, O, CLIM, CMAP, LIMS, opt)
                  'Visible', local_tern(opt.Show,'on','off'));
     tl = tiledlayout(fig, 3, 1, 'Padding','compact', 'TileSpacing','compact');
 
-    ax1 = nexttile(tl); local_draw_panel(ax1, 'z',  model, C, O, CLIM, CMAP, LIMS, opt);
-    ax2 = nexttile(tl); local_draw_panel(ax2, 'v',  model, C, O, CLIM, CMAP, LIMS, opt);
-    ax3 = nexttile(tl); local_draw_panel(ax3, 'ag', model, C, O, CLIM, CMAP, LIMS, opt);
+    ax1 = nexttile(tl); local_draw_panel(ax1, 'z',  model, C, O, REF, CMAP, LIMS, opt);
+    ax2 = nexttile(tl); local_draw_panel(ax2, 'v',  model, C, O, REF, CMAP, LIMS, opt);
+    ax3 = nexttile(tl); local_draw_panel(ax3, 'ag', model, C, O, REF, CMAP, LIMS, opt);
 
     % The geometry is named on the figure, not only in the filename: these are
     % three separate files and a reader should not have to check the path.
@@ -1311,7 +1603,7 @@ function fig = local_draw_one_model(model, C, O, CLIM, CMAP, LIMS, opt)
     xlabel(ax3, 't - t_impact (ms)', 'Interpreter', 'none');
 end
 
-function fig = local_draw_grid3x3(models, C, O, CLIM, CMAP, LIMS, opt)
+function fig = local_draw_grid3x3(models, C, O, REF, CMAP, LIMS, opt)
     nCol = numel(models);
     fig = figure('Color','w','Units','inches','Position',[1 1 7.0 6.4], ...
                  'Visible', local_tern(opt.Show,'on','off'));
@@ -1321,7 +1613,7 @@ function fig = local_draw_grid3x3(models, C, O, CLIM, CMAP, LIMS, opt)
     for r = 1:3
         for c = 1:nCol
             ax = nexttile(tl, (r-1)*nCol + c);
-            local_draw_panel(ax, ROWS{r}, models(c), C, O, CLIM, CMAP, LIMS, opt);
+            local_draw_panel(ax, ROWS{r}, models(c), C, O, REF, CMAP, LIMS, opt);
             % Full numeric tick labels on both axes of every panel: nothing is
             % blanked, even where a row or column repeats them.
             if r == 3
@@ -1334,7 +1626,7 @@ function fig = local_draw_grid3x3(models, C, O, CLIM, CMAP, LIMS, opt)
     end
 end
 
-function local_draw_panel(ax, rowKey, model, C, O, CLIM, CMAP, LIMS, opt)
+function local_draw_panel(ax, rowKey, model, C, O, REF, CMAP, LIMS, opt)
 %LOCAL_DRAW_PANEL  One (row, model) panel -- shared by both layouts and both
 %   styles, since C/O are already in a common shape.
 
@@ -1375,18 +1667,29 @@ function local_draw_panel(ax, rowKey, model, C, O, CLIM, CMAP, LIMS, opt)
             y(y <= 0) = NaN;
             if all(isnan(y)), continue; end
         end
-        col = local_v0_color(C(k).medV0, CLIM, CMAP);
+        col = local_curve_color(C(k), REF, CMAP, opt);
         plot(ax, C(k).t_ms, y, '-', 'LineWidth', 2.0, 'Color', col);
 
         if strcmp(rowKey, 'ag') && ~isempty(C(k).agTermT)
             % The measured rest state: a = 0 at rest, so a + g = g. Same colour
             % and weight as the curve because it IS the curve's last segment --
             % it ends at the same unified stop as the depth and velocity
-            % panels, and nothing is drawn past it. See local_ag_terminal.
+            % panels, and nothing is drawn past it. See local_rest_terminal.
             tSeg = C(k).agTermT;  ySeg = C(k).agTermY;
             if strcmp(opt.AccelScale, 'log'), ySeg(ySeg <= 0) = NaN; end
             plot(ax, tSeg, ySeg, '-', 'LineWidth', 2.0, 'Color', col, ...
                  'HandleVisibility', 'off');
+        end
+
+        if strcmp(rowKey, 'v') && ~isempty(C(k).vTermT)
+            % The rest state for velocity: 0 at the same unified stop. Exactly
+            % parallel to the a+g segment above, and for a narrower reason --
+            % the median ends small-positive by construction, because half the
+            % replicates are already at rest at 0 there and half are still
+            % moving. This closes that construction artefact; it is not
+            % asserting the rod decelerated any faster than measured.
+            plot(ax, C(k).vTermT, C(k).vTermY, '-', 'LineWidth', 2.0, ...
+                 'Color', col, 'HandleVisibility', 'off');
         end
 
         if strcmp(rowKey, 'ag') && ~isempty(C(k).agOnsetT)
@@ -1419,7 +1722,7 @@ function local_draw_panel(ax, rowKey, model, C, O, CLIM, CMAP, LIMS, opt)
         for k = find([O.model] == model)
             y = O(k).(rowKey);
             if isempty(y) || all(isnan(y)), continue; end
-            col = local_v0_color(O(k).medV0, CLIM, CMAP);
+            col = local_curve_color(O(k), REF, CMAP, opt);
             plot(ax, O(k).t_ms, y, '-', 'LineWidth', 0.75, 'Color', col);
         end
     end
