@@ -891,8 +891,9 @@ Both are areas of the foot **projected normal to the drop axis**, counting only
 the part that enters the bed.
 
 **The cut.** The STL drop axis is `−Y` (toes first). Everything at
-`y <= CutY` intrudes; `CutY` defaults to **−50 mm**, the beam top. Triangles
-crossing that plane are clipped (Sutherland–Hodgman) rather than dropped —
+`y <= CutY` intrudes; `CutY` defaults to **−50 mm**, the top of the rectangular
+beam (foot-bar junction). Triangles crossing that plane are clipped
+(Sutherland–Hodgman) rather than dropped —
 discarding them would remove area exactly at the plane where it is being
 measured.
 
@@ -904,6 +905,13 @@ silhouette, which is a different quantity.
 |---|---|
 | `A_bare` | area of the union of the projected triangles, as a `polyshape`. Gaps between the toes are **holes** and are not counted. |
 | `A_hull` | area of the convex hull of the same projected vertices. The swept envelope, gaps included. |
+
+Both constants are **foot-only**. The inclined bar and the marker post begin
+at `y = −50` and enter the bed once the toe tip is deeper than `z = 1.12 cm`;
+beyond that, the bare projected area of everything below the surface grows by
+about **0.10 cm² per mm** (2.12 → 2.96 cm² at `z = 2.0 cm`, 3.73 cm² at
+`z = 2.9 cm`). The depth dependence is written by the script to
+`foot_area_vs_depth.csv` and plotted in `fig_foot_area_vs_depth`.
 
 Reported in cm² (`polyshape` area is mm², divided by 100).
 
@@ -924,10 +932,13 @@ written.
 
 **Sensitivity to the cut.** Both areas change by roughly **4–5% per mm** of
 `CutY`, and the shift is nearly uniform across the three models — so the
-**ratios above are insensitive** to the exact cut, even though the absolute
-values are not. Quote `A_hull/A_bare` when comparing models; quote an absolute
-area only alongside the `CutY` it was computed at. Every value the script writes
-carries its `CutY`, in the CSV and in the figure title.
+**ratios above are insensitive within about ±0.5 mm of the cut**, even though
+the absolute values are not. Quote `A_hull/A_bare` when comparing models; quote
+an absolute area only alongside the `CutY` it was computed at. Every value the
+script writes carries its `CutY`, in the CSV and in the figure title.
+
+They are **not** insensitive to counting the bar: `A_hull/A_bare` =
+1.23 / 1.65 / 1.91 at the cut becomes 1.15 / 1.45 / 1.66 at `z = 2.9 cm`.
 
 ---
 
