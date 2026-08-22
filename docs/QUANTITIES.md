@@ -367,8 +367,18 @@ from impact, per foot model.
 > figures. Net-acceleration curves begin at the free-fall value a+g = 0 at the
 > impact instant and terminate at the rest value a+g = g (dotted line) at each
 > height's unified stop; both endpoints are physically determined boundary
-> states (free fall: a = g; rest: a = 0). Values between are the measured
-> ensemble medians. All quantitative fits use unmodified kinematics.
+> states (free fall: a = g; rest: a = 0); the steep terminal drop is the
+> measured stopping discontinuity (Delta a = a+g_terminal - g). Values between
+> are the measured ensemble medians. All quantitative fits use unmodified
+> kinematics.
+
+**Caption language for `ColorBy` `'height'` (the default):**
+
+> Colors indicate nominal drop height on the ladder shared by all three
+> geometries; measured v0 for each condition appears in the velocity panel.
+> Nearby heights differ in impact speed by less than the trial-to-trial spread
+> at the upper ladder, so height labels are nominal grouping keys; all
+> quantitative analysis uses measured v0.
 
 **Display layer.** Every step below affects the drawing only. Nothing is
 written back, and no fit sees any of it:
@@ -381,7 +391,9 @@ written back, and no fit sees any of it:
 | curve terminates at the height's **median replicate `t_stop`** — the same endpoint in all three panels | all rows |
 | `movmean` per row (`SmoothMs`: depth 1.0 ms, v 2.0 ms, a+g 1.5 ms), applied AFTER aggregation; NaN-aware, with the pre-smoothing NaN mask re-applied afterward | each row independently |
 | **edge-preserving** smoothing — window half-width = distance to the edge of the finite support, so the first and last samples are returned unchanged and the window stays symmetric | `a + g` only |
-| draw the computed median only where **support ≥ `MinReplicates`**, cutting the thin-support tail. Not a clamp: nothing is floored at `g` | `a + g` only |
+| before impact, draw only where **support ≥ `MinReplicates`** — trials carry different amounts of pre-impact recording, so the median steps as the contributing set changes | all rows |
+| after impact, draw the computed median only where **support ≥ `MinReplicates`**, cutting the thin-support tail. Not a clamp: nothing is floored at `g` | `a + g` only |
+| append a final segment from the last drawn sample to `(t_stop, 0)` — the rest state, closing the small-positive end the median has by construction | `v` only |
 | prepend a leading segment from `(t = 0, a + g = 0)` to the first computed sample — the free-fall boundary state | `a + g` only |
 | append one final segment from the last computed value down to `a + g = g` at the unified stop — the rest boundary state | `a + g` only |
 | on the default linear axis, nothing is masked or clipped. Under `'AccelScale','log'` only, mask `a + g <= AccelYMin` to NaN, since a log axis cannot render non-positive values | `a + g` only |
@@ -471,13 +483,42 @@ is there to be seen against, not read off.
 It terminates at the **same** `t` as the depth and velocity curves — one stop
 per `(model, height)`, shared by that figure's three panels, never a separately
 computed acceleration endpoint and never shared between geometries. Nothing is
-drawn past it. `'Diagnose', true` asserts the three endpoints are identical.
+drawn past it. `'Diagnose', true` asserts the three endpoints are identical,
+comparing where each row is *last drawn* — for the two anchored rows that is the
+end of their terminal segment, which the `a + g` support gate may place beyond
+the end of the computed series.
+
+**Velocity is anchored the same way, to its own rest value.** At the unified
+stop the median `v` ends small-**positive** by construction: about half the
+replicates are already at rest at 0 there and the rest are still moving, so the
+median sits just above zero. A final segment to `(t_stop, 0)` closes that —
+same helper, same endpoint. Unlike the `a + g` drop it carries no physical
+content; it removes a construction artefact rather than displaying a measured
+discontinuity, and it does not assert the rod decelerated faster than measured.
 
 The three panels do **not** share a *start*, and are not meant to: depth and
 velocity begin at `-PreCapMs`, `a + g` at its free-fall anchor at `t = 0`. The
 assertion is on endpoints only, deliberately.
 
-**The `a + g` tail is support-gated.** Depth and velocity are rest-extended, so
+**Both ends are support-gated.** A row is drawn only where at least
+`MinReplicates` replicates contribute — the same threshold that decides whether
+a height is plotted at all.
+
+*Before impact this applies to all three rows.* Trials do not carry the same
+amount of pre-impact recording: Stage A's window starts where the red markers
+appear, so at −10 ms a height may have three trials contributing where at −2 ms
+it has ten. The median then steps as the contributing **set** changes, which is
+the kink that was visible in the Default velocity curve near −5 ms — an artefact
+of who is in the average, not of the motion. Each row uses its own support
+count, since the three need not thin out together.
+
+Neither gate can punch an interior hole. Support is non-increasing away from
+`t = 0` in both directions — going back, a trial drops out at the start of its
+own recording and never returns; going forward, at its own stop — so each gate
+trims a contiguous head or tail. `'Diagnose', true` prints both cut times per
+height.
+
+**After impact only the `a + g` tail needs gating.** Depth and velocity are rest-extended, so
 every replicate contributes at every grid point. `a + g` is not — the pipeline
 computes no post-stop acceleration — so past the earliest replicate stop the
 pointwise median is taken over fewer and fewer trials, until it is wandering
@@ -495,10 +536,16 @@ smoothing, so the smoother's trailing edge sits at the gate rather than
 reaching past it into samples that will not be drawn.
 
 **This is a gate, not a floor.** Nothing is clamped to `g` anywhere. `a + g`
-below `g` mid-penetration is real — the grains are decelerating the rod less
-than gravity accelerates it — and those values are preserved exactly. Only the
-thin-support tail is removed. `'Diagnose', true` prints each height's cut time
-and the gap from there to the unified stop.
+below `g` mid-penetration is real and is kept exactly as computed: `a + g < g`
+is simply `a > 0`, the grain force momentarily below the foot's own weight,
+which is ordinary during penetration. Only the thin-support tail is removed.
+
+What *would* be a defect is the median dipping below `g` while most of its own
+replicates stay above it — an aggregate driven by one or two outliers rather
+than by the population. So `'Diagnose', true` reports, for each height whose
+curve dips below `g` after impact, the fraction of the replicates contributing
+at the dip minimum whose own `a > 0`, and flags it below **0.70**. It is a
+diagnostic, not a filter: it decides nothing about what is drawn.
 
 The `'trials'` QA style applies **no** gate: a single trial has support 1
 everywhere, so the ensemble threshold would blank the entire row in the one
@@ -517,33 +564,51 @@ support returns the first and last samples unchanged while keeping the window
 symmetric, so nothing is phase-shifted. `'Diagnose', true` asserts the first
 `a + g` sample equals the aggregate's.
 
-**Colour is one global `v0` scale across all three geometries.** The range is
-computed once and handed unchanged to each figure, so the same physical `v0` is
-the same colour in Default, Tight and Wide. Zero-drop curves are excluded from
-the range even when drawn: their `v0` is 0 by quarantine rather than by
-measurement, so including it would anchor the scale at zero and compress every
-real curve into the top of the colormap.
+**Colour encodes one of two things (`'ColorBy'`).**
 
-It is derived from the **full loaded set, before the `'Models'` filter** — not
-from the curves that were built. That distinction is the fix for a real defect:
-`fig_kinematics` filters its table by `'Models'` immediately after loading, so
-a range taken from the built curves was a property of the *invocation*, not of
-the dataset. Drawing all three geometries in one call gave one mapping;
-regenerating a single geometry on its own — the natural way to redraw one
-figure — gave another. Nothing was wrong inside the per-model loop; the range
-handed to it was already wrong.
+| mode | index | why |
+|---|---|---|
+| `'height'` (default) | rank of the nominal drop height on the ladder shared by all three geometries — 25 mm coldest, 365 mm warmest | a **rank on a fixed ladder** makes the three figures step through identical colours *by construction*, whatever `v0` each geometry reached at a given height |
+| `'v0'` | median impact speed through one shared range | the earlier behaviour, retained unchanged |
 
-The range is reproduced without loading any traces: group the full set by
+Nothing here modifies a measured `v0`. It remains the plotted data in the
+velocity panel, the `medV0` on every curve, and the number every analysis uses.
+
+Zero-drop curves are excluded from both references even when drawn: their `v0`
+is 0 by quarantine rather than by measurement, which would anchor the `v0`
+scale at zero and put a phantom rung at the foot of the ladder. A height not on
+the ladder — a zero-drop overlay at `h = 0` — falls to the nearest rung, taking
+the coldest colour.
+
+The ladder is the **union** of the heights across geometries, not the
+intersection, so a height present in only one geometry keeps its own rung and
+does not shift the colours of the heights around it in the others.
+
+**Both references are built from the full loaded set, before the `'Models'`
+filter** — not from the curves that were built. That distinction is the fix for
+a real defect in the `'v0'` mode: `fig_kinematics` filters its table by
+`'Models'` immediately after loading, so a range taken from the built curves was
+a property of the *invocation*, not of the dataset. Drawing all three geometries
+in one call gave one mapping; regenerating a single geometry on its own — the
+natural way to redraw one figure — gave another. Nothing was wrong inside the
+per-model loop; the range handed to it was already wrong.
+
+Both are reproduced without loading any traces: group the full set by
 `(model, height)`, take the median `v0` per group, keep groups with at least
 `MinReplicates` trials. That group set is a slight *superset* of the curves
 actually drawn — a group can clear the threshold here and still lose its curve
-if a trial proves unreadable — which can only widen the range a little, and
-widens it identically on every run.
+if a trial proves unreadable. For `'v0'` that can only widen the range a little;
+for `'height'` it can only add a rung no curve occupies, which shifts nothing,
+since a height's colour is its rank and the ladder is the same in every figure
+either way. Both are stable across invocations, which is the property being
+bought.
 
-The range is printed in the run summary and returned as `R.clim`, and each
-figure's low/high `v0` → colormap index is printed under `colour check` so the
-claim is verifiable from the log: the same `v0` must print the same index in
-every figure, and every line must quote the same `clim`.
+The active reference is printed in the run summary and returned as `R.clim` /
+`R.ladder` (both populated in either mode, alongside `R.colorBy`). Each figure's
+extreme curves are printed under `colour check` so the claim is verifiable from
+the log: in `'height'` mode the same height must print the same index in every
+figure; in `'v0'` mode the same `v0` must, and every line must quote the same
+`clim`.
 
 **Style.** A **black** dashed vertical line at `t = 0` in every panel —
 impact is the reference the whole figure is drawn against, so it is not light
