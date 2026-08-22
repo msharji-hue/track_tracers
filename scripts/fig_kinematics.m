@@ -15,7 +15,11 @@ function R = fig_kinematics(varargin)
 %   OPTIONS (name-value)
 %       'Root'              results root (parent of 03_RESULTS); '' prompts
 %       'Models'            order (default ["Default","Tight","Wide"])
-%       'PreCapMs'          pre-impact context cap, ms (default 20)
+%       'PreCapMs'          pre-impact context cap, ms (default 10). Keep it
+%                           an exact multiple of GridMs (10/0.2 = 50) so t = 0
+%                           lands ON a grid point: that is what makes the
+%                           first ensemble a+g sample the impact sample itself
+%                           rather than a point already partway up the rise.
 %       'GridMs'            ensemble time step, ms (default 0.2)
 %       'MinReplicates'     minimum trials for a height to be PLOTTED AT ALL
 %                           (default 3). It no longer decides where a curve
@@ -76,22 +80,36 @@ function R = fig_kinematics(varargin)
 %   not compute post-stop acceleration, and filling a value forward would be
 %   fabricating a trace rather than displaying one.
 %
-%   a+g IS SHOWN ONLY WHERE THE PIPELINE COMPUTES IT. kd_kinematics masks a to
-%   NaN outside [impact_index, stopFrame], so the a+g panel spans exactly that
-%   interval and pre-impact a+g is NaN. Nothing reconstructs it: the near-
-%   vertical rise at onset and the drop near the stop are the measured data,
-%   rendered as they are.
+%   EVERY a+g VALUE BETWEEN THE ANCHORS IS MEASURED. kd_kinematics masks a to
+%   NaN outside [impact_index, stopFrame], so the computed part of the panel
+%   spans exactly that interval; nothing inside it is reconstructed, and no
+%   pre-impact acceleration is estimated from the velocity or anywhere else.
+%   The two boundary anchors below are the only drawn values that do not come
+%   from the trace, and both are exact rather than inferred.
 %
-%   TERMINAL REST SEGMENT. The a+g curve ends with one segment from its last
-%   computed value down to a + g = g at the unified stop. At rest the bed
-%   carries the rod's weight, so a = 0 and a + g = g exactly -- a measured
-%   state, not an extrapolation, and the one point after the stop that is
-%   known rather than guessed. The drop across that segment is the per-height
-%   acceleration discontinuity: how much net upward acceleration the grains
-%   were still supplying when the rod stopped. It ends at the SAME t as the
-%   depth and velocity curves (one stop per height per geometry, shared by
-%   that figure's three panels) and nothing is drawn past it. 'Diagnose'
-%   asserts the three endpoints are identical.
+%   BOUNDARY ANCHORS AT BOTH ENDS. The a+g curve is drawn between two states
+%   that are known exactly without being recorded, because the definition
+%   a + g = g - a fixes them:
+%
+%       onset, as t -> 0-    free fall, a = g   ->  a + g = 0
+%       stop, at t_stop      at rest,   a = 0   ->  a + g = g
+%
+%   Neither is in the stored trace -- kd_kinematics computes a only over
+%   [impact_index, stopFrame] -- and neither is a measurement, a
+%   reconstruction or a placeholder. They are boundary values, and the curve
+%   is anchored to them: a leading segment from (0, 0) to the first computed
+%   sample, and a trailing segment from the last computed sample down to g.
+%
+%   What this buys: the steep rise is shown as the measured jump from its true
+%   starting state rather than materialising at ~g out of nowhere, and the drop
+%   across the terminal segment reads as the per-height acceleration
+%   discontinuity -- how much net upward acceleration the grains were still
+%   supplying when the rod stopped -- against a dotted reference line at g.
+%
+%   The terminal segment ends at the SAME t as the depth and velocity curves
+%   (one stop per height per geometry, shared by that figure's three panels)
+%   and nothing is drawn past it. The three panels do NOT share a start, and
+%   are not meant to. 'Diagnose' asserts the ENDPOINTS are identical.
 %
 %   AXIS CHOICE ('AccelScale', default 'linear'). The plotted a+g spans roughly
 %   1e3-2.2e4 cm/s^2 -- about one decade -- so a linear axis preserves the
@@ -134,7 +152,7 @@ function R = fig_kinematics(varargin)
 % ── options ──────────────────────────────────────────────────────────────
 opt.Root               = '';
 opt.Models             = ["Default","Tight","Wide"];
-opt.PreCapMs           = 20;
+opt.PreCapMs           = 10;
 opt.GridMs             = 0.2;
 opt.MinReplicates      = 3;
 opt.Average            = 'median';
@@ -272,9 +290,10 @@ end
 fprintf(['\n  display layer: pointwise %ss over replicates with post-stop rest\n' ...
          '  extension; movmean smoothing per row, edge-preserving on a+g so the\n' ...
          '  measured onset at impact is not averaged upward; a+g on a %s axis,\n' ...
-         '  ending in the measured rest state (a = 0, so a+g = g) at the same\n' ...
-         '  unified stop as depth and v; quantitative fits use unmodified\n' ...
-         '  pipeline kinematics.\n'], opt.Average, opt.AccelScale);
+         '  anchored at both ends to its boundary states (free fall a+g = 0 at\n' ...
+         '  t = 0; rest a+g = g at the unified stop shared with depth and v);\n' ...
+         '  quantitative fits use unmodified pipeline kinematics.\n'], ...
+         opt.Average, opt.AccelScale);
 
 if opt.Diagnose
     local_diagnose(C, opt);
@@ -305,6 +324,15 @@ fprintf(['  shared v0 colour scale : %.1f - %.1f cm/s over %d retained ' ...
 
 % ── shared axis limits, computed once across every model and row ─────────
 LIMS = local_shared_limits(C, O, opt);
+if strcmp(opt.AccelScale, 'log')
+    fprintf('  shared a+g y-limits   : %.4g - %.4g cm/s^2 (log axis)\n', ...
+            LIMS.ag_log(1), LIMS.ag_log(2));
+else
+    fprintf(['  shared a+g y-limits   : %.4g - %.4g cm/s^2 ' ...
+             '(floor held at 0; top = 1.05 x global max)\n'], ...
+            LIMS.ag_lin(1), LIMS.ag_lin(2));
+end
+fprintf('  shared t-limits       : %.4g - %.4g ms\n', LIMS.t(1), LIMS.t(2));
 
 % ── figures ──────────────────────────────────────────────────────────────
 figs    = struct();
@@ -524,6 +552,7 @@ function [C, O] = local_build_ensembles(K, opt)
         % median rather than the first makes a stray calib harmless.
         gRest = median(cellfun(@(s) s.g_cm_s2, loaded));
         [agTermT, agTermY] = local_ag_terminal(grid, aC, tEndMs, gRest);
+        [agOnsT, agOnsY]   = local_ag_onset(grid, aC);
 
         % At the endpoint every replicate contributes (rest-extended), while
         % only about half are still in their measured phase -- which is exactly
@@ -548,8 +577,11 @@ function [C, O] = local_build_ensembles(K, opt)
             'interiorNaN',  local_interior_nan(zC, vC, aC), ...
             'agRaw',        aRaw, ...
             'tEndMs',       tEndMs, ...
+            'gRest',        gRest, ...
             'agTermT',      agTermT, ...
             'agTermY',      agTermY, ...
+            'agOnsetT',     agOnsT, ...
+            'agOnsetY',     agOnsY, ...
             't_ms', grid, 'z', zC, 'v', vC, 'ag', aC);   %#ok<AGROW>
 
         % ── individual zero-drop overlays (only when explicitly enabled) ──
@@ -593,6 +625,7 @@ function C = local_build_trials(K, opt)
         % rest segment, same rule.
         tEndMs = t(end);
         [agTermT, agTermY] = local_ag_terminal(t, aC, tEndMs, s.g_cm_s2);
+        [agOnsT,  agOnsY]  = local_ag_onset(t, aC);
 
         C(end+1) = struct( ...                                    %#ok<AGROW>
             'model',        K.model(i), ...
@@ -610,10 +643,50 @@ function C = local_build_trials(K, opt)
             'interiorNaN',  local_interior_nan(zC, vC, aC), ...
             'agRaw',        s.ag(idx), ...
             'tEndMs',       tEndMs, ...
+            'gRest',        s.g_cm_s2, ...
             'agTermT',      agTermT, ...
             'agTermY',      agTermY, ...
+            'agOnsetT',     agOnsT, ...
+            'agOnsetY',     agOnsY, ...
             't_ms', t, 'z', zC, 'v', vC, 'ag', aC);
     end
+end
+
+function [tSeg, ySeg] = local_ag_onset(tAxis, ag)
+%LOCAL_AG_ONSET  The free-fall boundary value, as one leading a+g segment.
+%
+%   During free fall the rod's acceleration IS gravity: a = g. Depth is
+%   positive into the bed, so the net grain acceleration is
+%
+%       a + g = g - a = g - g = 0        identically, as t -> 0-
+%
+%   Zero is therefore not an assumption or a placeholder -- it is the exact
+%   value of this quantity for every falling trial, at every height, fixed by
+%   the definition in src/net_accel.m. It is a boundary state, not a
+%   measurement, in the same sense as the rest state g the terminal segment
+%   drops to: the pipeline computes no a outside [impact_index, stopFrame], so
+%   neither endpoint appears in the stored trace, and both are known exactly
+%   without being recorded.
+%
+%   Anchoring here is what makes the rise READ correctly. Without it the curve
+%   simply materialises at ~g and climbs; with it the steep rise from 0 into
+%   the first peak is the measured jump shown from its true starting state.
+%
+%   Implemented as a leading segment rather than by prepending to the ag
+%   vector itself because t_ms is ONE axis shared by the depth, velocity and
+%   a+g rows -- growing a+g alone would desynchronise it from the other two
+%   and from agRaw, which the Diagnose onset assertion compares against.
+%
+%   The segment ends on the first computed post-impact sample, so no measured
+%   value is displaced. When that sample sits at t = 0 (it does whenever
+%   PreCapMs is a multiple of GridMs) the segment is vertical: the jump is
+%   instantaneous at impact, which is exactly what the data says.
+    tSeg = [];  ySeg = [];
+    i = find(isfinite(ag), 1, 'first');
+    if isempty(i), return; end
+    if tAxis(i) < 0, return; end          % nothing sensible to anchor to
+    tSeg = [0;      tAxis(i)];
+    ySeg = [0;      ag(i)];
 end
 
 function [tSeg, ySeg] = local_ag_terminal(tAxis, ag, tEndMs, g)
@@ -652,7 +725,8 @@ function C = local_empty_curve()
                'nMax',{}, 'medStopMs',{}, 'tStopMinMs',{}, 'tStopMaxMs',{}, ...
                'supportAtEnd',{}, 'supportMeasAtEnd',{}, 'oldRuleEndMs',{}, ...
                'nShortRec',{}, 'interiorNaN',{}, 'agRaw',{}, ...
-               'tEndMs',{}, 'agTermT',{}, 'agTermY',{}, ...
+               'tEndMs',{}, 'gRest',{}, 'agTermT',{}, 'agTermY',{}, ...
+               'agOnsetT',{}, 'agOnsetY',{}, ...
                't_ms',{}, 'z',{}, 'v',{}, 'ag',{});
 end
 
@@ -858,6 +932,12 @@ function local_diagnose(C, opt)
         % height per geometry, shared across that figure's three panels -- if
         % these ever diverged, the a+g panel would be telling a different story
         % about when the rod stopped than the two above it.
+        %
+        % ENDPOINTS ONLY, deliberately. The three panels do NOT share a start:
+        % depth and velocity begin at -PreCapMs, while a+g begins at its
+        % free-fall anchor at t = 0 because the pipeline computes no
+        % acceleration before impact. That asymmetry is the design, so this
+        % must never be widened into a startpoint check.
         badEnd = false;
         for q = sel
             tz = local_last_t(C(q).t_ms, C(q).z);
@@ -946,9 +1026,15 @@ function LIMS = local_shared_limits(C, O, opt)
 %LOCAL_SHARED_LIMITS  One set of x/y limits per row, shared across every model
 %   and every figure, so the three geometry figures are directly comparable.
 %
-%   Every axis carries a 5% margin beyond the data extent, so no curve or stop
-%   marker sits on a panel edge. The depth panel needs this most: its markers
-%   sit exactly at each curve's maximum and were being clipped by the frame.
+%   Depth and velocity carry a 5% margin beyond the data extent, so no curve or
+%   stop marker sits on a panel edge. The depth panel needs this most: its
+%   markers sit exactly at each curve's maximum and were being clipped by the
+%   frame.
+%
+%   a+g is different and deliberately so: its floor is a hard 0 with no
+%   downward padding, because 0 is the free-fall boundary value the onset
+%   segments anchor to rather than an arbitrary data minimum. Only the top gets
+%   the 5% headroom.
 %
 %   The x-limit runs from -PreCapMs to the LATEST ensemble endpoint across all
 %   geometries -- the last point actually drawn, not the end of the internal
@@ -986,16 +1072,32 @@ function LIMS = local_shared_limits(C, O, opt)
     YL_v = local_pad_ylim(vAll, MARGIN);
     YL_v(1) = 0;                 % velocity floor is zero: nothing below rest
 
-    % The terminal segments are part of the drawn a+g data: they reach down to
-    % g, which is below every deceleration value, so leaving them out would put
-    % the rest state under the axis floor on the log scale.
-    agAll = [vertcat(C.ag); vertcat(C.agTermY)];
-    YL_ag_lin = local_pad_ylim(agAll, MARGIN);
-    YL_ag_lin(1) = 0;            % a+g is a magnitude here; the axis starts at 0
+    % Every drawn a+g value: the curves, the terminal segments reaching down to
+    % g, and the onset segments reaching down to 0. All three are part of the
+    % same line, so all three set the range.
+    agAll = [vertcat(C.ag); vertcat(C.agTermY); vertcat(C.agOnsetY)];
+
+    % ONE shared a+g range across all three geometry figures. The floor is a
+    % hard 0 -- not padded downward and never raised -- because 0 is the
+    % free-fall boundary value the onset segments anchor to, and lifting the
+    % floor would cut them off. The top is 1.05x the global maximum over every
+    % plotted curve, so the tallest peak in any geometry clears the frame by
+    % 5% and the same a+g reads at the same height in all three figures.
+    agMax = max(agAll(isfinite(agAll)));
+    if isempty(agMax) || ~(agMax > 0), agMax = 1; end
+    YL_ag_lin = [0, 1.05 * agMax];
     YL_ag_log = local_log_ylim(agAll, opt.AccelYMin);
 
+    % The rest baseline drawn behind the a+g data. Taken from the curves so it
+    % is the same g those traces were computed with (net_accel's second
+    % output), not a constant restated here.
+    gRef = NaN;
+    gAll = [C.gRest];
+    gAll = gAll(isfinite(gAll));
+    if ~isempty(gAll), gRef = median(gAll); end
+
     LIMS = struct('t', XL, 'z', YL_z, 'v', YL_v, ...
-                  'ag_lin', YL_ag_lin, 'ag_log', YL_ag_log);
+                  'ag_lin', YL_ag_lin, 'ag_log', YL_ag_log, 'gRef', gRef);
 end
 
 function yl = local_pad_ylim(vals, margin)
@@ -1090,11 +1192,21 @@ function local_draw_panel(ax, rowKey, model, C, O, CLIM, CMAP, LIMS, opt)
     apply_fig_style(ax);
 
     % Drawn FIRST so they sit behind the data.
-    xline(ax, 0, '--', 'Color', [0.82 0.82 0.82], 'LineWidth', 0.75, ...
+    % Impact is the reference every panel is drawn against, so its line is
+    % black rather than a light grey that reads as chart furniture.
+    xline(ax, 0, '--', 'Color', [0 0 0], 'LineWidth', 0.9, ...
           'HandleVisibility', 'off');
     if strcmp(rowKey, 'z')
         % Solid thin line at depth = 0: the bed surface, a physical datum.
         yline(ax, 0, '-', 'Color', [0.35 0.35 0.35], 'LineWidth', 0.5, ...
+              'HandleVisibility', 'off');
+    end
+    if strcmp(rowKey, 'ag') && isfinite(LIMS.gRef)
+        % The rest baseline, a + g = g. Dotted, light and unlabelled: it is
+        % there so the terminal drops can be seen landing on a marked value,
+        % not to be read off. Deliberately NOT the removed dashed g line of
+        % the earlier draft, which sat on top of the data at full weight.
+        yline(ax, LIMS.gRef, ':', 'Color', [0.60 0.60 0.60], 'LineWidth', 0.75, ...
               'HandleVisibility', 'off');
     end
 
@@ -1126,6 +1238,19 @@ function local_draw_panel(ax, rowKey, model, C, O, CLIM, CMAP, LIMS, opt)
                  'HandleVisibility', 'off');
         end
 
+        if strcmp(rowKey, 'ag') && ~isempty(C(k).agOnsetT)
+            % The free-fall boundary state: a = g while falling, so a + g = 0
+            % exactly. Same colour and weight -- it is the curve's first
+            % segment. See local_ag_onset. Masked out on a log axis, which
+            % cannot draw zero at all.
+            tSeg = C(k).agOnsetT;  ySeg = C(k).agOnsetY;
+            if strcmp(opt.AccelScale, 'log'), ySeg(ySeg <= 0) = NaN; end
+            if any(isfinite(ySeg))
+                plot(ax, tSeg, ySeg, '-', 'LineWidth', 2.0, 'Color', col, ...
+                     'HandleVisibility', 'off');
+            end
+        end
+
         if strcmp(rowKey, 'z')
             % Stop marker at the unified endpoint: the height's median t_stop.
             last = find(~isnan(y), 1, 'last');
@@ -1148,15 +1273,16 @@ function local_draw_panel(ax, rowKey, model, C, O, CLIM, CMAP, LIMS, opt)
         end
     end
 
+    isLogAg = strcmp(rowKey, 'ag') && strcmp(opt.AccelScale, 'log');
     switch rowKey
         case 'ag'
-            if strcmp(opt.AccelScale, 'log')
+            if isLogAg
                 set(ax, 'YScale', 'log');
                 ylim(ax, LIMS.ag_log);
             else
                 set(ax, 'YScale', 'linear');
-                ylim(ax, LIMS.ag_lin);   % 0 to data max + 5%; MATLAB adds the
-            end                          % x10^4 multiplier on the tick labels
+                ylim(ax, LIMS.ag_lin);   % 0 to 1.05x global max; MATLAB adds
+            end                          % the x10^4 multiplier on the labels
             ylabel(ax, 'a + g (cm/s^2)', 'Interpreter', 'none');
         case 'v'
             ylim(ax, LIMS.v);
@@ -1166,6 +1292,61 @@ function local_draw_panel(ax, rowKey, model, C, O, CLIM, CMAP, LIMS, opt)
             ylabel(ax, 'depth (cm)', 'Interpreter', 'none');
     end
     xlim(ax, LIMS.t);
+
+    % ── ticks ────────────────────────────────────────────────────────────
+    % Explicit major ticks on both axes, every one labelled (no XTickLabel is
+    % set, so MATLAB labels them all). No minor ticks: the shared house style
+    % in src/apply_fig_style.m leaves them at MATLAB's default off, and turning
+    % them on here would desynchronise this figure from depth_scaling.
+    % A grid3x3 panel is a third the width of a per-model one, so it takes a
+    % third of the labels before the time axis starts to collide.
+    maxXT = 14;
+    if strcmp(opt.Layout, 'grid3x3'), maxXT = 8; end
+    xt = local_time_ticks(LIMS.t, maxXT);
+    if numel(xt) >= 2, set(ax, 'XTick', xt); end
+    if ~isLogAg
+        % Log ticks are decade powers and MATLAB already picks them well.
+        yt = local_round_ticks(ylim(ax), 6);
+        if numel(yt) >= 2, set(ax, 'YTick', yt); end
+    end
+end
+
+function ticks = local_time_ticks(xl, maxTicks)
+%LOCAL_TIME_TICKS  Major time ticks on a round millisecond step.
+%   Prefers 5 ms and steps up through round values only when 5 would crowd the
+%   axis. The pre-impact window is 10 ms by default, so a 5 ms step puts ticks
+%   at -10 and -5 and no closer: the crowding to avoid is on the long
+%   post-impact side, not before impact. Which step wins therefore depends on
+%   how far the slowest geometry's curves run, not on the pre-window.
+    ticks = local_step_ticks(xl, [5 10 20 25 50 100 200], maxTicks);
+end
+
+function ticks = local_round_ticks(yl, maxTicks)
+%LOCAL_ROUND_TICKS  Major ticks on a round step of 1, 2, 2.5 or 5 x 10^n.
+%   The standard nice-number rule: take the smallest round step that keeps the
+%   tick count at or under maxTicks.
+    ticks = [];
+    r = yl(2) - yl(1);
+    if ~(r > 0) || ~all(isfinite(yl)), return; end
+    raw = r / max(2, maxTicks - 1);
+    mag = 10^floor(log10(raw));
+    step = 10*mag;
+    for m = [1 2 2.5 5 10]
+        if m*mag >= raw, step = m*mag; break; end
+    end
+    ticks = (ceil(yl(1)/step) : floor(yl(2)/step)) * step;
+end
+
+function ticks = local_step_ticks(lims, candidates, maxTicks)
+%LOCAL_STEP_TICKS  First candidate step giving at most maxTicks ticks.
+    ticks = [];
+    if ~all(isfinite(lims)) || ~(lims(2) > lims(1)), return; end
+    step = candidates(end);
+    for s = candidates
+        n = floor(lims(2)/s) - ceil(lims(1)/s) + 1;
+        if n >= 2 && n <= maxTicks, step = s; break; end
+    end
+    ticks = (ceil(lims(1)/step) : floor(lims(2)/step)) * step;
 end
 
 % ═════════════════════════════════════════════════════════════════════════

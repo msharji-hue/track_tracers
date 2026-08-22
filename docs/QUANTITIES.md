@@ -364,9 +364,11 @@ from impact, per foot model.
 
 > Curves are pointwise medians over replicate drops. Zero-drop trials are
 > reserved for scalar measurements and are not shown in the time-history
-> figures. Net acceleration is shown over the interval between impact and stop,
-> the range over which the pipeline resolves it. All quantitative fits use
-> unmodified kinematics.
+> figures. Net-acceleration curves begin at the free-fall value a+g = 0 at the
+> impact instant and terminate at the rest value a+g = g (dotted line) at each
+> height's unified stop; both endpoints are physically determined boundary
+> states (free fall: a = g; rest: a = 0). Values between are the measured
+> ensemble medians. All quantitative fits use unmodified kinematics.
 
 **Display layer.** Every step below affects the drawing only. Nothing is
 written back, and no fit sees any of it:
@@ -379,7 +381,8 @@ written back, and no fit sees any of it:
 | curve terminates at the height's **median replicate `t_stop`** — the same endpoint in all three panels | all rows |
 | `movmean` per row (`SmoothMs`: depth 1.0 ms, v 2.0 ms, a+g 1.5 ms), applied AFTER aggregation; NaN-aware, with the pre-smoothing NaN mask re-applied afterward | each row independently |
 | **edge-preserving** smoothing — window half-width = distance to the edge of the finite support, so the first and last samples are returned unchanged and the window stays symmetric | `a + g` only |
-| append one final segment from the last computed value down to `a + g = g` at the unified stop — the measured rest state | `a + g` only |
+| prepend a leading segment from `(t = 0, a + g = 0)` to the first computed sample — the free-fall boundary state | `a + g` only |
+| append one final segment from the last computed value down to `a + g = g` at the unified stop — the rest boundary state | `a + g` only |
 | on the default linear axis, nothing is masked or clipped. Under `'AccelScale','log'` only, mask `a + g <= AccelYMin` to NaN, since a log axis cannot render non-positive values | `a + g` only |
 
 **Why rest-extension replaced "terminate below `MinReplicates`".** Replicates
@@ -404,37 +407,74 @@ recorded trace exceeds `IntrusionThreshCm`) is retained behind the same option
 rather than deleted, and is otherwise unchanged: a threshold rule evaluated
 against the unwindowed trace, not a hardcoded tag list.
 
-**`a + g` is shown over `[impact, stop]` only.** `kd_kinematics` masks its
-stored `a` — and therefore `a + g` — to NaN outside `[impact_index, stopFrame]`,
-and the figure plots exactly that. The figure reconstructs no pre-impact
-acceleration and inserts no synthetic onset point; every plotted sample is a
-measured one, and the row simply begins at impact.
+**`a + g` is computed over `[impact, stop]` only, and anchored at both ends.**
+`kd_kinematics` masks its stored `a` — and therefore `a + g` — to NaN outside
+`[impact_index, stopFrame]`, and the figure plots exactly that between its two
+boundary anchors. Nothing inside that interval is reconstructed: no pre-impact
+acceleration is estimated from the velocity or from anywhere else.
+
+The two anchors are the only drawn values not taken from the trace, and both
+are **exact consequences of the definition** `a + g = g - a`, not estimates:
+
+| boundary | state | `a` | `a + g` |
+|---|---|---|---|
+| onset, as `t → 0⁻` | free fall | `g` | **0** |
+| stop, at `t_stop` | at rest | `0` | **`g`** |
+
+Neither appears in the stored trace, because the pipeline computes `a` only
+between impact and stop. That makes them unrecorded, not unknown — the same
+status the rest state has always had here. A leading segment runs from
+`(0, 0)` to the first computed sample; a trailing segment runs from the last
+computed sample down to `g`.
+
+This is a deliberate reversal of the earlier "no synthetic onset point" rule,
+and the distinction is what makes it one. That rule rejected inserting a
+*chosen* value (`1e1`) to force a visible rise. Zero is not chosen: it is what
+`g - a` equals for every falling trial at every height. Anchoring to it means
+the steep rise reads as the measured jump from its true starting state, instead
+of the curve materialising at `~g` partway up.
 
 **`a + g` (row c) is on a linear y-axis by default.** Over `[impact, stop]` this
 rig's values span roughly `1e3`–`2.2e4` cm/s² — about one decade — where a
 linear axis reads more directly than a log one. (KD 2007 Fig. 1c is logarithmic
 because their 20 µs sampling resolves `1e1`–`1e4`, three decades.) Pass
 `'AccelScale','log'` for the KD-matched log presentation, floored at
-`AccelYMin` (default `1e2` cm/s²). There is no dashed reference line at `g`.
-Depth and v are never clamped; v's y-axis lower limit is fixed at 0.
+`AccelYMin` (default `1e2` cm/s²). Depth and v are never clamped; v's y-axis
+lower limit is fixed at 0.
 
-**Axis margins.** Every axis is padded by 5% of its drawn data range, so no
-curve, marker or endpoint sits on the frame. Limits are computed once from the
-pooled drawn data and shared across models within each row.
+The `a + g` y-range is **one shared range across all three geometry figures**:
 
-**The `a + g` curve ends in the measured rest state.** One final segment runs
-from the last computed value down to `a + g = g` at the unified stop: at rest
-the bed carries the rod's weight, so `a = 0` and `a + g = g` exactly. That is a
-measured state, not an extrapolation — and the one point after the stop that is
-known rather than guessed, which is why it is drawn while the post-stop trace
-is not. The drop across the segment is the per-height **acceleration
-discontinuity**: how much net upward acceleration the grains were still
-supplying at the instant the rod stopped.
+```
+ymin = 0                    hard floor, never raised
+ymax = 1.05 × (global max over every plotted a+g curve, all models)
+```
+
+The floor is a hard 0 rather than a padded data minimum because 0 is the
+free-fall boundary value the onset segments anchor to — padding downward would
+waste the axis, raising it would cut them off. Only the top gets headroom. Both
+limits are printed in the run summary.
+
+**Axis margins.** Depth and velocity are padded by 5% of their drawn data
+range, so no curve, marker or endpoint sits on the frame. Limits are computed
+once from the pooled drawn data and shared across models within each row.
+
+**The `a + g` curve ends in the rest state.** One final segment runs from the
+last computed value down to `a + g = g` at the unified stop: at rest the bed
+carries the rod's weight, so `a = 0` and `a + g = g` exactly. The drop across
+the segment is the per-height **acceleration discontinuity** — how much net
+upward acceleration the grains were still supplying at the instant the rod
+stopped — and a light dotted reference line at `g` is drawn behind the data so
+the drops can be seen landing on a marked baseline. The line is unlabelled: it
+is there to be seen against, not read off.
 
 It terminates at the **same** `t` as the depth and velocity curves — one stop
 per `(model, height)`, shared by that figure's three panels, never a separately
 computed acceleration endpoint and never shared between geometries. Nothing is
 drawn past it. `'Diagnose', true` asserts the three endpoints are identical.
+
+The three panels do **not** share a *start*, and are not meant to: depth and
+velocity begin at `-PreCapMs`, `a + g` at its free-fall anchor at `t = 0`. The
+assertion is on endpoints only, deliberately.
 
 **Why the `a + g` row alone is smoothed edge-preserving.** `movmean`'s
 `'shrink'` rule truncates the window at a boundary but still averages about
@@ -457,12 +497,28 @@ is 0 by quarantine rather than by measurement, so including it would anchor the
 scale at zero and compress every real curve into the top of the colormap. The
 range is printed in the run summary and returned as `R.clim`.
 
-**Style.** A dashed vertical line at `t = 0` in every panel; a solid thin line
-at `depth = 0` in the depth panel (the bed surface); no other reference lines.
-Axes convention (`hold`/`grid`/`box`) comes from `src/apply_fig_style.m`, shared
-with `scripts/depth_scaling.m` so the two figure families stay matched; change
-the house style there and both follow. Every panel keeps full numeric tick
-labels on both axes and its own x-label.
+**Style.** A **black** dashed vertical line at `t = 0` in every panel —
+impact is the reference the whole figure is drawn against, so it is not light
+grey chart furniture; a solid thin line at `depth = 0` in the depth panel (the
+bed surface); a light dotted line at `g` in the `a + g` panel. No others.
+
+Axes convention (`hold`/`grid`/`box`) comes from `src/apply_fig_style.m`,
+shared with `scripts/depth_scaling.m` so the two figure families stay matched;
+change the house style there and both follow.
+
+**Ticks.** Major ticks are set explicitly and every one is labelled. Time uses
+the smallest round step from 5, 10, 20, 25, 50 ms that does not crowd the axis
+— a `grid3x3` panel is a third the width of a per-model one and gets a
+correspondingly lower tick budget. The `y` axes use the standard round step
+(`1`, `2`, `2.5`, `5` × 10ⁿ). No minor ticks: `apply_fig_style` leaves them at
+MATLAB's default off, and enabling them here would desynchronise this figure
+from `depth_scaling`. Every panel keeps full numeric labels on both axes and
+its own x-label.
+
+**Pre-impact window.** `'PreCapMs'`, default **10 ms**. Keep it an exact
+multiple of `GridMs` (10/0.2 = 50) so `t = 0` lands *on* a grid point — that is
+what makes the first ensemble `a + g` sample the impact sample itself rather
+than a point already partway up the rise.
 
 **Layout.** `'per-model'` (default) writes three figures, one per model, each
 a 3×1 vertical stack sharing the time axis, single-column APS width. `'grid3x3'`
