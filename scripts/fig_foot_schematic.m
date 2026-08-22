@@ -633,9 +633,10 @@ function fig = local_figure_sweep(name, SW, L, opt)
     for ax = [ax1 ax2]
         yl = ylim(ax);
         for yy = [L.barBottom, L.postTop]
-            plot(ax, L.z(yy)/10*[1 1], yl, ':', 'Color', [0.4 0.4 0.4]);
+            plot(ax, L.z(yy)/10*[1 1], yl, ':', 'Color', [0.4 0.4 0.4], ...
+                 'HandleVisibility', 'off');
         end
-        plot(ax, L.z(opt.CutY)/10*[1 1], yl, 'k--');
+        plot(ax, L.z(opt.CutY)/10*[1 1], yl, 'k--', 'HandleVisibility', 'off');
         ylim(ax, yl); xlim(ax, [0 max(zc)]);
         set(ax, 'FontSize', 8, 'LineWidth', 0.5, 'Layer', 'top');
     end
