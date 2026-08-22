@@ -355,6 +355,131 @@ quarantine would delete the very rows it is meant to preserve.
 
 ---
 
+## Figure 1 — kinematics figure
+
+`scripts/fig_kinematics.m`. Depth, velocity and net acceleration against time
+from impact, per foot model.
+
+**Pre-agreed caption language:**
+
+> Curves are pointwise medians over replicate drops. Zero-drop trials are
+> reserved for scalar measurements and are not shown in the time-history
+> figures. Net acceleration is shown over the interval between impact and stop,
+> the range over which the pipeline resolves it. All quantitative fits use
+> unmodified kinematics.
+
+**Display layer.** Every step below affects the drawing only. Nothing is
+written back, and no fit sees any of it:
+
+| step | applies to |
+|---|---|
+| resample each replicate onto a uniform grid (`GridMs`, default 0.2 ms) relative to impact | all rows |
+| after each trial's OWN detected `t_stop` (`kin.t_stop_s`, never the quarantined table scalar), fill ALL of that trial's remaining grid points — to the end of the grid, not just to its own last sample — with its measured **rest state** — `v = 0`, depth = its `d_final`, `a + g = NaN`. Filling to the grid end is what keeps a trial in the pointwise aggregate for the whole drawn interval; stopping at its last sample leaves NaNs *inside* the region and can void the median mid-curve. Where a recording ends before its detected `t_stop`, rest-fill begins at that last sample instead — an approximation, counted and reported as `nShortRec` under `'Diagnose', true` | depth, v (not `a + g`: the pipeline computes no post-stop acceleration, and none is invented here) |
+| pointwise `Average` across the **full replicate set** (`'median'` default, or `'mean'`) at every grid point | all rows |
+| curve terminates at the height's **median replicate `t_stop`** — the same endpoint in all three panels | all rows |
+| `movmean` per row (`SmoothMs`: depth 1.0 ms, v 2.0 ms, a+g 1.5 ms), applied AFTER aggregation; NaN-aware, with the pre-smoothing NaN mask re-applied afterward | each row independently |
+| **edge-preserving** smoothing — window half-width = distance to the edge of the finite support, so the first and last samples are returned unchanged and the window stays symmetric | `a + g` only |
+| append one final segment from the last computed value down to `a + g = g` at the unified stop — the measured rest state | `a + g` only |
+| on the default linear axis, nothing is masked or clipped. Under `'AccelScale','log'` only, mask `a + g <= AccelYMin` to NaN, since a log axis cannot render non-positive values | `a + g` only |
+
+**Why rest-extension replaced "terminate below `MinReplicates`".** Replicates
+stop at different times. Under the old rule, past the earliest stop the
+aggregate was taken over only the longest-lasting trials — survivor bias — and
+the curve was pulled toward them before ending early. Filling each trial's rest
+state keeps every replicate in the aggregate for its whole duration; run with
+`'Diagnose', true` for the per-height replicate `t_stop` spread, the support
+count at the curve's endpoint under both rules, and confirmation that display
+smoothing does not shift the `a + g` onset. `MinReplicates` (default 3) now
+gates only whether a height is **plotted at all**, not where a curve ends.
+
+A consequence to check in the render: `v` decays to ~0 at the endpoint by
+**construction of the median** — about half the replicates are already at rest
+there — not by being forced to zero.
+
+**Zero-drop trials are excluded by default** (`'ShowZeroDrop'`, default
+`false`): they are reserved for scalar measurements and are not shown in these
+time-history figures. The individual-intrusion overlay rule (a zero-drop trial
+drawn as its own thin curve, depth/v only, when its depth range over the whole
+recorded trace exceeds `IntrusionThreshCm`) is retained behind the same option
+rather than deleted, and is otherwise unchanged: a threshold rule evaluated
+against the unwindowed trace, not a hardcoded tag list.
+
+**`a + g` is shown over `[impact, stop]` only.** `kd_kinematics` masks its
+stored `a` — and therefore `a + g` — to NaN outside `[impact_index, stopFrame]`,
+and the figure plots exactly that. The figure reconstructs no pre-impact
+acceleration and inserts no synthetic onset point; every plotted sample is a
+measured one, and the row simply begins at impact.
+
+**`a + g` (row c) is on a linear y-axis by default.** Over `[impact, stop]` this
+rig's values span roughly `1e3`–`2.2e4` cm/s² — about one decade — where a
+linear axis reads more directly than a log one. (KD 2007 Fig. 1c is logarithmic
+because their 20 µs sampling resolves `1e1`–`1e4`, three decades.) Pass
+`'AccelScale','log'` for the KD-matched log presentation, floored at
+`AccelYMin` (default `1e2` cm/s²). There is no dashed reference line at `g`.
+Depth and v are never clamped; v's y-axis lower limit is fixed at 0.
+
+**Axis margins.** Every axis is padded by 5% of its drawn data range, so no
+curve, marker or endpoint sits on the frame. Limits are computed once from the
+pooled drawn data and shared across models within each row.
+
+**The `a + g` curve ends in the measured rest state.** One final segment runs
+from the last computed value down to `a + g = g` at the unified stop: at rest
+the bed carries the rod's weight, so `a = 0` and `a + g = g` exactly. That is a
+measured state, not an extrapolation — and the one point after the stop that is
+known rather than guessed, which is why it is drawn while the post-stop trace
+is not. The drop across the segment is the per-height **acceleration
+discontinuity**: how much net upward acceleration the grains were still
+supplying at the instant the rod stopped.
+
+It terminates at the **same** `t` as the depth and velocity curves — one stop
+per `(model, height)`, shared by that figure's three panels, never a separately
+computed acceleration endpoint and never shared between geometries. Nothing is
+drawn past it. `'Diagnose', true` asserts the three endpoints are identical.
+
+**Why the `a + g` row alone is smoothed edge-preserving.** `movmean`'s
+`'shrink'` rule truncates the window at a boundary but still averages about
+half a window there. Depth and velocity begin `PreCapMs` before impact, where
+the curve is flat, so that costs nothing. `a + g` begins *at* impact, on the
+steepest part of the trace: at the impact sample `v` is maximal, so `a ≈ 0` and
+`a + g ≈ g` (~0.1e4). Averaging that measured onset together with the rise above
+it reported the mid-rise value (0.3–1.6e4) as the curve's starting point.
+
+Setting the window's half-width to the distance from the edge of the finite
+support returns the first and last samples unchanged while keeping the window
+symmetric, so nothing is phase-shifted. `'Diagnose', true` asserts the first
+`a + g` sample equals the aggregate's.
+
+**Colour is one global `v0` scale across all three geometries.** The range is
+computed once over every retained height of every model and handed unchanged to
+each figure, so the same physical `v0` is the same colour in Default, Tight and
+Wide. Zero-drop curves are excluded from the range even when drawn: their `v0`
+is 0 by quarantine rather than by measurement, so including it would anchor the
+scale at zero and compress every real curve into the top of the colormap. The
+range is printed in the run summary and returned as `R.clim`.
+
+**Style.** A dashed vertical line at `t = 0` in every panel; a solid thin line
+at `depth = 0` in the depth panel (the bed surface); no other reference lines.
+Axes convention (`hold`/`grid`/`box`) comes from `src/apply_fig_style.m`, shared
+with `scripts/depth_scaling.m` so the two figure families stay matched; change
+the house style there and both follow. Every panel keeps full numeric tick
+labels on both axes and its own x-label.
+
+**Layout.** `'per-model'` (default) writes three figures, one per model, each
+a 3×1 vertical stack sharing the time axis, single-column APS width. `'grid3x3'`
+reproduces the earlier combined rows-×-models figure in one file. Axis limits
+are identical across models within each row in both layouts.
+
+**`Style`** selects the presentation: `'mean'` (default) is the figure above;
+`'trials'` draws every kept trial individually and unaveraged, for QA (no rest
+extension — each trial ends at its own stop), sharing the same drawing code so
+the two are directly comparable.
+
+**Reportable scalars.** `fig1_kinematics_stops.csv` (model, height, median v0,
+median `t_stop`, n) is written alongside the figures for the cross-geometry
+comparison.
+
+---
+
 ## Which trials are excluded, and by what
 
 `src/load_kinematics_set.m` → the rules block; `src/get_manual_exclusions.m`.
@@ -382,8 +507,23 @@ default**, so every analysis reaching data through the loader drops the same
 trials — this is what stopped the per-script copies from drifting apart when
 `load_default_gb` was retired.
 
-As of the 2026-08-20 review it holds **23 Default GB/full trials**, all excluded
-for stop-fit failure or a bad velocity profile.
+The list is kept as one **block per review decision**, concatenated at the end
+of the function. The block header carries the full reasoning; each line still
+carries a short reason and a date, so a tag stays self-describing if a block is
+ever split. Two reviews are recorded:
+
+| block | n | reason |
+|---|---|---|
+| 2026-08-20 | 23 | stop-fit failure or a bad velocity profile (all Default GB/full) |
+| 2026-08-21 A | 5 | `v0`/`t_stop` inconsistent with any ladder height — off-ladder drop or failed trial |
+| 2026-08-21 B | 14 | measurement failure: `v0` inconsistent with the trial's own `d_final` and/or above any free-fall bound |
+| 2026-08-21 C | 1 | `v0` matches the 125 mm class but `d_final` = 1.71 cm sits outside that bin's core; no clean match |
+
+Block A's five are not individually odd. As a *group* they share a coherent
+low-`v0` / long-`t_stop` signature matching no rung of the ladder — and
+specifically not 65 mm, where the two relabeled 25 mm trials went. A consistent
+signature that fits nothing is a different failure from a noisy trace, and it
+is why they are excluded rather than relabeled: there is no bin to move them to.
 
 **Overriding.** Passing `'exclude'` **replaces** the list rather than adding to
 it:
@@ -407,6 +547,79 @@ a stale tag left after a rename is otherwise invisible.
 Anything expressible as a rule belongs in the rules, not in the manual list.
 To retire a manual exclusion, delete its line: git history is the record of
 what was once excluded, and a commented-out tag reads as ambiguous forever.
+
+**Excluding is not the only answer.** A trial whose *height label* is wrong but
+whose data are sound belongs in `get_relabel_map` (below), not here: excluding
+throws away a good measurement, relabeling keeps it in the bin it came from.
+Exclusion is for trials with no bin to go to.
+
+---
+
+## Height relabeling: `dropHeight_mm` vs `dropHeight_asRecorded`
+
+`src/get_relabel_map.m`, applied by `src/load_kinematics_set.m`.
+
+A few trials carry a recorded height label that review established is wrong.
+`get_relabel_map` returns a `trialTag` → corrected `dropHeight_mm` table, one
+row per trial with its reason and date, and the loader applies it **at read
+time**.
+
+| column | meaning |
+|---|---|
+| `dropHeight_mm` | the **corrected** height — what every axis, bin and fit should use |
+| `dropHeight_asRecorded` | the label as it came off the CSV; provenance, not a measurement |
+| `relabeled` | true where `dropHeight_mm` came from the map |
+
+**Nothing on disk is modified.** Raw videos, `01_FRAMES`, tracks, `_kin.mat`
+and `_kin_scalars.csv` all keep their original labels — including the height
+baked into the `trialTag` itself, so a relabeled trial reads `25mm_...`
+forever. That is deliberate: renaming files would break provenance back to the
+capture session and to every diagnostic ever run against that tag. The cost is
+that anything reading the CSVs *directly* rather than through
+`load_kinematics_set` sees the original label.
+
+Applied **before** `isZeroDrop` and before the zero-drop quarantine, because
+the corrected height is the physical truth: were a relabel ever to move a trial
+to or from `h = 0`, every rule downstream must see the corrected value.
+
+As of 2026-08-21 the map holds **two** entries — Default `25mm_T02` and
+`25mm_T03` → **65 mm** — each a quantitative match to the 65 mm bin on `v0`,
+`d_final` and `t_stop` (`d2` = 1.2 and 5.7, margin to the next-best bin ≥ 19),
+confirmed by trace overlay. The loader prints a summary line whenever a relabel
+fires, and reports any mapped tag that matched no file.
+
+---
+
+## The `v0` consistency guard
+
+`src/load_kinematics_set.m` → the guard block, after exclusions.
+
+Every kept `h > 0` trial is checked against the free-fall speed its label
+implies, `sqrt(2gh)` with `g` = 980 cm/s² (as `calib.g_cm_s2`). The measured
+ratio is returned as `v0_freefall_ratio`.
+
+| side | test | option | what it means |
+|---|---|---|---|
+| high | `v0 > v0RatioMax · sqrt(2gh)` | `'v0RatioMax'` (default 1.15) | physically impossible — the **label** or the **time base** is wrong |
+| low | `v0 < 0.5 · sqrt(2gh)` | fixed | a spoiled or snagged release (e.g. the known 85 mm Default trial at 39.9 cm/s) |
+
+**It warns and counts; it never drops.** Which trials to remove is a review
+decision that belongs in `get_manual_exclusions` with a reason attached, not in
+an automatic filter that would quietly reshape a bin the next time a threshold
+moved. The two sides are not symmetric: exceeding free fall is impossible once
+tolerance is allowed for, while falling short of it merely needs explaining, so
+the low-side threshold is deliberately loose — half of free fall is far below
+any honest air-drag loss over these heights.
+
+Real drops land a few percent *below* free fall, so the healthy ratio is just
+under 1. Two campaigns sit systematically above it because their release-height
+reference was offset; those warnings are documented behaviour, not bad trials —
+see the data notes in `README.md`.
+
+Option names on `load_kinematics_set` are matched case-insensitively and an
+unrecognised name is an **error**. A mistyped `'v0RatioMax'` would otherwise be
+absorbed as a struct field nothing reads, disabling the guard with no sign that
+it had happened.
 
 ---
 

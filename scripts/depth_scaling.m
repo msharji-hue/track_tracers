@@ -608,7 +608,7 @@ tl  = tiledlayout(1,2,'Padding','compact','TileSpacing','compact');
 title(tl, sprintf('depth scaling -- form: %s', form), 'FontWeight','bold');
 
 % ── Panel A: d vs v0, physical units, log-log ────────────────────────────
-ax1 = nexttile(tl); hold(ax1,'on'); grid(ax1,'on'); box(ax1,'on');
+ax1 = nexttile(tl); apply_fig_style(ax1);   % shared house style, src/
 set(ax1,'XScale','log','YScale','log');
 hA = gobjects(nG,1); lA = strings(nG,1);
 for g = 1:nG
@@ -633,7 +633,7 @@ legend(ax1, [hA(ok); plot(ax1,NaN,NaN,'k--')], [lA(ok); "v_0^{2/3}"], ...
        'Location','northwest','Box','off');
 
 % ── Panel B: the form's collapse ─────────────────────────────────────────
-ax2 = nexttile(tl); hold(ax2,'on'); grid(ax2,'on'); box(ax2,'on');
+ax2 = nexttile(tl); apply_fig_style(ax2);   % shared house style, src/
 switch form
     case {'ambroso','literature'}
         % d/d0 vs v0/v*, the collapse the law predicts. d0 is read from the fit

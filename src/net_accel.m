@@ -1,8 +1,13 @@
-function ag = net_accel(kin, calib)
+function [ag, g] = net_accel(kin, calib)
 %NET_ACCEL  Net grain acceleration, a + g = g - a, from the RAW a trace.
 %
-%   ag = net_accel(kin)          % g taken as 980 cm/s^2
-%   ag = net_accel(kin, calib)   % g taken from calib.g_cm_s2
+%   ag      = net_accel(kin)          % g taken as 980 cm/s^2
+%   ag      = net_accel(kin, calib)   % g taken from calib.g_cm_s2
+%   [ag, g] = net_accel(...)          % also the g actually used
+%
+%   The second output exists so callers that need g -- to draw the rest state
+%   at a + g = g, say -- get the value THIS function used rather than
+%   re-deriving it from calib and drifting apart from the fallback below.
 %
 %   RECOMPUTES rather than reading kin.a_plus_g, and that is the point.
 %   _kin.mat files written before the 2026-08 correction carry the old formula

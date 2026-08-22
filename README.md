@@ -215,7 +215,11 @@ Default geometry is validated at **269 trials**:
 | CHIN / as_poured | 40 |
 
 After the automatic rules (NaN depth; `d > 4.00 cm`; GB/shallow `d > 2.50 cm`;
-GLITCH) plus 26 manual exclusions.
+GLITCH) plus the manual exclusions in `src/get_manual_exclusions.m`.
+
+That trial count predates the 2026-08-21 integrity review below, which added 20
+exclusions and 2 relabels. The live figure is the one `load_kinematics_set`
+prints on every load — read it there rather than from this table.
 
 Substrate properties (`src/get_substrate_properties.m`), finalised as the mean
 of five independent preparations:
@@ -231,6 +235,59 @@ The ± on φ is **random only**; particle densities are treated as exact, so
 absolute φ carries an additional systematic that cancels between conditions but
 not against literature. Retired single-measurement values: 0.629 / 0.636 /
 0.276 / 0.409.
+
+---
+
+## Data notes
+
+### Release-height offsets in the Tight and Wide campaigns
+
+The Tight campaign's release-height reference sat **~+10–13 mm high**: median
+`v0 / sqrt(2gh)` = 1.14, 1.07, 1.05 at h = 45, 65, 85 mm, matching a
+constant-offset model `sqrt((h + dh)/h)`. The ratio falls toward 1 as h grows,
+which is the signature of a fixed offset rather than a scale error — a
+mis-calibrated fps or a wrong `mmPerPx` would bias every height by the same
+factor.
+
+Height labels are **nominal grouping keys**. All quantitative analysis uses
+measured `v0`, which is unaffected by where the release reference sat, so the
+offset does not propagate into any fit. The v0 guard's Tight warnings at low
+heights reflect this documented offset, **not bad trials**.
+
+The Wide campaign shows a smaller **~3%** offset (ratios 1.03–1.04), also
+documented, also immaterial to `v0`-based analysis.
+
+Concretely: the Tight 45 mm trials `T03`, `T05`, `T06`, `T09`, `T10` were
+flagged by the free-fall check and deliberately **kept**. They are one
+population with their clean 45 mm siblings under this offset, and excluding
+them would have removed half a height bin to fix a reference error that no
+reported quantity depends on.
+
+### 2026-08-21 integrity review
+
+A matcher was run over every trial, scoring each against every height bin on
+`v0`, `d_final` and `t_stop`. It flagged **27 trials** whose recorded height
+was inconsistent with their own kinematics. The review resolved them as:
+
+| outcome | n | where it lives |
+|---|---|---|
+| relabeled | 2 | `src/get_relabel_map.m` |
+| unflagged — documented Tight offset, not a defect | 5 | kept; see above |
+| excluded | 20 | `src/get_manual_exclusions.m`, blocks A–C |
+
+The two relabels are Default `25mm_T02` and `25mm_T03` → **65 mm**, each a
+quantitative match to the 65 mm bin (`d2` = 1.2 and 5.7, margin to the
+next-best bin ≥ 19) and confirmed by trace overlay. Relabeling is applied at
+**read time only** — no stored file changes, and the trialTag still reads
+`25mm_...` so provenance back to the capture session survives.
+
+The matcher script `scripts/relabel_candidates.m` and the CSV it writes,
+`relabel_candidates.csv`, are the audit trail for all 27 decisions.
+
+> **`scripts/relabel_candidates.m` is not yet committed.** The maintainer's
+> copy is the authoritative one and should be added here as-is. It has
+> deliberately not been reconstructed: a re-derived matcher would produce its
+> own scores, which is precisely what an audit trail must not do.
 
 ---
 
