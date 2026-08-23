@@ -23,6 +23,9 @@ function R = fig_foot_schematic(varargin)
 %       'Save'    write PDF + PNG + CSV     (default true)
 %       'Show'    display the figures       (default true)
 %       'Labels'  add callouts to Figure A  (default false)
+%       'Inset'   Figure B without axis labels or tick labels, with a
+%                 scale bar instead; exports as fig_foot_footprints_inset
+%                 (default false)
 %       'DepthSweep'  also compute A_bare(z), A_hull(z), a_local(z) over a
 %                 depth grid, draw Figure C and write foot_area_vs_depth.csv
 %                 (default true)
@@ -73,6 +76,7 @@ opt.OutDir = '';
 opt.Save   = true;
 opt.Show   = true;
 opt.Labels = false;
+opt.Inset  = false;
 opt.DepthSweep = true;
 opt.SweepZ = [0:0.25:12, 12.5:0.5:40];   % mm below the toe tip
 for i = 1:2:numel(varargin), opt.(varargin{i}) = varargin{i+1}; end
@@ -249,7 +253,8 @@ end
 written = strings(0,1);
 if opt.Save
     written = [written; local_export(figA, opt.OutDir, 'fig_foot_assembly')];
-    written = [written; local_export(figB, opt.OutDir, 'fig_foot_footprints')];
+    written = [written; local_export(figB, opt.OutDir, ...
+        local_tern(opt.Inset, 'fig_foot_footprints_inset', 'fig_foot_footprints'))];
     csvPath = local_write_csv(opt, name, stlPath, Abare, Ahull);
     written = [written; string(csvPath)];
     if opt.DepthSweep
@@ -464,11 +469,18 @@ function fig = local_figure_assembly(stlPath, L, opt)
 %LOCAL_FIGURE_ASSEMBLY  Default model, FULL mesh, projected along Z onto XY.
 %   Silhouette only: the union boundary as a black line over a light grey fill,
 %   with no wireframe. Mesh lines would read as structure that is not there.
+%
+%   The vertical axis is depth below the toe tip, L.toeTip - y, drawn with YDir
+%   reverse so the tip sits at 0 at the bottom and the assembly rises above it.
+%   Boxed and ticked: the axes carry the scale, so the figure needs neither a
+%   scale bar nor overlay lines drawn across the model.
 
     ws = warning;                     % full current state, restored on exit
     warning('off', 'MATLAB:polyshape:repairedBySimplify');
     warning('off', 'MATLAB:polyshape:boundary3Points');
     restore = onCleanup(@() warning(ws)); %#ok<NASGU>
+
+    yD = @(yy) L.toeTip - yy;         % STL y -> depth below the toe tip, mm
 
     tri = stlread(stlPath);
     P = tri.Points;  F = tri.ConnectivityList;
@@ -477,75 +489,62 @@ function fig = local_figure_assembly(stlPath, L, opt)
     kept = 0;
     for f = 1:size(F,1)
         x = P(F(f,:), 1).';
-        y = P(F(f,:), 2).';
+        y = yD(P(F(f,:), 2).');
         if polyarea(x, y) < 1e-9, continue; end
         kept = kept + 1;
         parts{kept} = polyshape(x, y, 'Simplify', true);
     end
     pg = union([parts{1:kept}]);
 
-    fig = figure('Color','w','Units','inches','Position',[1 1 3.4 5.0], ...
+    % Landscape: the assembly is about 100 mm along the foot by 59 mm deep, so
+    % a portrait canvas would spend most of its height on empty axes once the
+    % aspect is equalised. The right margin is left wide for the cut label,
+    % which sits outside the right spine.
+    fig = figure('Color','w','Units','inches','Position',[1 1 5.2 3.2], ...
                  'Visible', local_tern(opt.Show,'on','off'));
-    ax = axes(fig); hold(ax,'on');
+    ax = axes(fig, 'Position', [0.11 0.15 0.58 0.74]);
+    hold(ax,'on'); box(ax,'on');
 
     plot(pg, 'Parent', ax, 'FaceColor', [0.85 0.85 0.85], 'FaceAlpha', 1, ...
              'EdgeColor', 'k', 'LineWidth', 1.0);
 
-    % Equal aspect FIRST: it changes the limits, and every overlay below is
+    % Equal aspect FIRST: it changes the limits, and the cut tick below is
     % placed in data coordinates relative to them.
     axis(ax, 'equal');
+    set(ax, 'YDir', 'reverse', 'FontSize', 8, 'LineWidth', 0.5, 'Layer', 'top');
     xl = xlim(ax);  yl = ylim(ax);
     xr = xl(2) - xl(1);
 
-    % Cut plane, with its toe-tip depth so the reader can place it on z.
-    plot(ax, xl, [opt.CutY opt.CutY], 'k--', 'LineWidth', 1.0);
-    text(ax, xl(2), opt.CutY, sprintf(' area cut: foot/bar junction, z = %.2f cm', L.z(opt.CutY)/10), ...
-         'FontSize', 8, 'VerticalAlignment', 'bottom', ...
-         'HorizontalAlignment', 'right');
-    % Geometry-derived depth landmarks (dotted), not typed-in positions.
-    lmk = {'toe bars: bottom', L.barBottom; 'post: top', L.postTop};
-    for i = 1:size(lmk,1)
-        plot(ax, xl, [lmk{i,2} lmk{i,2}], ':', 'Color', [0.4 0.4 0.4], 'LineWidth', 0.8);
-        text(ax, xl(1), lmk{i,2}, sprintf(' %s, z = %.2f cm', lmk{i,1}, L.z(lmk{i,2})/10), ...
-             'FontSize', 7, 'Color', [0.3 0.3 0.3], 'VerticalAlignment', 'bottom');
-    end
+    % The cut as a tick on the right spine rather than a rule across the
+    % model: same information, without a line laid over the geometry.
+    yCut = yD(opt.CutY);
+    plot(ax, [xl(2) - 0.06*xr, xl(2)], [yCut yCut], 'k-', 'LineWidth', 1.2);
+    text(ax, xl(2) + 0.03*xr, yCut, 'foot area defined below here', ...
+         'FontSize', 8, 'HorizontalAlignment', 'left', ...
+         'VerticalAlignment', 'middle', 'Clipping', 'off');
 
-    % Drop direction: an arrow along -Y, drawn in data coords so it cannot
-    % drift from the geometry the way a figure-space annotation would.
-    ax0 = xl(1) - 0.10*xr;
-    yTop = yl(2) - 0.05*(yl(2)-yl(1));
-    yBot = yl(1) + 0.20*(yl(2)-yl(1));
-    quiver(ax, ax0, yTop, 0, yBot - yTop, 'Color', 'k', 'LineWidth', 1.2, ...
-           'MaxHeadSize', 0.4, 'AutoScale', 'off');
-    text(ax, ax0, (yTop+yBot)/2, ' drop direction', 'Rotation', 90, ...
-         'FontSize', 8, 'HorizontalAlignment', 'center', ...
-         'VerticalAlignment', 'bottom');
-
-    % 10 mm scale bar
-    sbX = xl(2) - 0.05*xr - 10;
-    sbY = yl(1) + 0.06*(yl(2)-yl(1));
-    plot(ax, [sbX sbX+10], [sbY sbY], 'k-', 'LineWidth', 2.0);
-    text(ax, sbX+5, sbY, '10 mm', 'FontSize', 8, ...
-         'HorizontalAlignment','center', 'VerticalAlignment','top');
+    xlabel(ax, 'along foot (mm)', 'FontSize', 8);
+    ylabel(ax, 'depth below toe tip (mm)', 'FontSize', 8);
 
     if opt.Labels
         % Positions come from the geometry-derived landmarks, so the labels
-        % name the part that is actually at that y. (The earlier fractional
-        % placement put 'beam' beside the inclined bar, which is not the
-        % structure the cut is defined on.)
-        xr2 = xl(2) + 0.02*xr;
-        lab = { 'mount',                         (L.mountBottom + yl(2))/2 ; ...
-                'inclined bar (linkage)',        (opt.CutY + L.mountBottom)/2 ; ...
-                'marker post',                   L.postTop ; ...
-                'rectangular beam (proximal toe bars)', (opt.CutY + L.barBottom)/2 ; ...
-                'distal toe segments',           (L.barBottom + L.toeTip)/2 };
+        % name the part that is actually at that depth. (The earlier
+        % fractional placement put 'beam' beside the inclined bar, which is
+        % not the structure the cut is defined on.) yl(1) is the shallowest
+        % edge of the axes, which YDir reverse draws at the top.
+        xr2 = xl(2) + 0.03*xr;
+        lab = { 'mount',                                (yD(L.mountBottom) + yl(1))/2 ; ...
+                'inclined bar (linkage)',               (yCut + yD(L.mountBottom))/2  ; ...
+                'marker post',                          yD(L.postTop)                 ; ...
+                'rectangular beam (proximal toe bars)', (yCut + yD(L.barBottom))/2    ; ...
+                'distal toe segments',                  (yD(L.barBottom) + yD(L.toeTip))/2 };
         for i = 1:size(lab,1)
             text(ax, xr2, lab{i,2}, lab{i,1}, 'FontSize', 8, ...
-                 'HorizontalAlignment','left', 'VerticalAlignment','middle');
+                 'HorizontalAlignment','left', 'VerticalAlignment','middle', ...
+                 'Clipping', 'off');
         end
     end
 
-    axis(ax, 'off');
     title(ax, 'Foot assembly (Default), side view', 'FontSize', 9);
 end
 
@@ -556,18 +555,31 @@ function fig = local_figure_footprints(name, FP, HULL, Abare, Ahull, opt)
 %LOCAL_FIGURE_FOOTPRINTS  1x3, increasing toe splay, shared limits.
 %   Shared x/z limits are what make the panels comparable: the growth of the
 %   hull across models is the message, and per-panel autoscaling would hide it.
+%
+%   The horizontal origin is the toe tip -- the largest x any of the three
+%   footprints reaches is subtracted -- so 0 is the tip and the foot runs back
+%   from it. 'Inset' drops the labels and tick labels and carries a scale bar
+%   instead, for a panel that sits inside another figure.
 
     n = numel(name);
     fig = figure('Color','w','Units','inches','Position',[1 1 7.0 2.6], ...
                  'Visible', local_tern(opt.Show,'on','off'));
     tl = tiledlayout(fig, 1, n, 'Padding','compact', 'TileSpacing','compact');
 
+    % Toe tip to 0. Taken over all three footprints so the panels stay on one
+    % common origin; per-panel shifts would break the comparison.
+    xShift = -inf;
+    for i = 1:n
+        [xi, ~] = boundingbox(FP{i});
+        xShift = max(xShift, xi(2));
+    end
+
     % Common limits over every footprint AND hull, with a small margin.
     xs = []; zs = [];
     for i = 1:n
         [xi, zi] = boundingbox(FP{i});
-        xs = [xs, xi]; zs = [zs, zi]; %#ok<AGROW>
-        xs = [xs, min(HULL{i}(:,1)), max(HULL{i}(:,1))]; %#ok<AGROW>
+        xs = [xs, xi - xShift]; zs = [zs, zi]; %#ok<AGROW>
+        xs = [xs, min(HULL{i}(:,1)) - xShift, max(HULL{i}(:,1)) - xShift]; %#ok<AGROW>
         zs = [zs, min(HULL{i}(:,2)), max(HULL{i}(:,2))]; %#ok<AGROW>
     end
     pad = 0.05 * max(max(xs)-min(xs), max(zs)-min(zs));
@@ -579,26 +591,44 @@ function fig = local_figure_footprints(name, FP, HULL, Abare, Ahull, opt)
 
         % Bare footprint. polyshape renders holes as background, so the gaps
         % between the toes read as gaps rather than as filled area.
-        plot(FP{i}, 'Parent', ax, 'FaceColor', [0.75 0.75 0.75], ...
-             'FaceAlpha', 1, 'EdgeColor', [0.25 0.25 0.25], 'LineWidth', 0.6);
+        plot(translate(FP{i}, [-xShift 0]), 'Parent', ax, ...
+             'FaceColor', [0.75 0.75 0.75], 'FaceAlpha', 1, ...
+             'EdgeColor', [0.25 0.25 0.25], 'LineWidth', 0.6);
 
         % Convex hull
-        plot(ax, HULL{i}(:,1), HULL{i}(:,2), 'r--', 'LineWidth', 1.2);
+        plot(ax, HULL{i}(:,1) - xShift, HULL{i}(:,2), 'r--', 'LineWidth', 1.2);
 
         axis(ax, 'equal');
         xlim(ax, XL); ylim(ax, ZL);
         set(ax, 'FontSize', 8, 'LineWidth', 0.5, 'Layer', 'top');
-        xlabel(ax, 'x (mm)', 'FontSize', 8);
-        if i == 1, ylabel(ax, 'z (mm)', 'FontSize', 8); end
+
+        if opt.Inset
+            set(ax, 'XTickLabel', [], 'YTickLabel', []);
+        else
+            xlabel(ax, 'along foot (mm)', 'FontSize', 8);
+            if i == 1, ylabel(ax, 'across foot (mm)', 'FontSize', 8); end
+        end
 
         % Title carries the COMPUTED values, never typed-in ones.
         title(ax, sprintf('%s: A_{bare} = %.2f, A_{hull} = %.2f cm^2', ...
                           name(i), Abare(i), Ahull(i)), ...
               'FontSize', 8, 'FontWeight','normal');
+
+        % Inset mode has no tick labels to read, so the first panel carries
+        % the scale instead.
+        if opt.Inset && i == 1
+            sbX = XL(1) + 0.08*(XL(2)-XL(1));
+            sbY = ZL(1) + 0.10*(ZL(2)-ZL(1));
+            plot(ax, [sbX sbX+10], [sbY sbY], 'k-', 'LineWidth', 2.0);
+            text(ax, sbX+5, sbY, '10 mm', 'FontSize', 8, ...
+                 'HorizontalAlignment','center', 'VerticalAlignment','bottom');
+        end
     end
 
-    title(tl, sprintf('Intruding footprint at y = %g mm (grey) and convex hull (red)', ...
-                      opt.CutY), 'FontSize', 9);
+    if ~opt.Inset
+        title(tl, sprintf('Intruding footprint at y = %g mm (grey) and convex hull (red)', ...
+                          opt.CutY), 'FontSize', 9);
+    end
 end
 
 % ═════════════════════════════════════════════════════════════════════════
