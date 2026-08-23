@@ -470,17 +470,17 @@ function fig = local_figure_assembly(stlPath, L, opt)
 %   Silhouette only: the union boundary as a black line over a light grey fill,
 %   with no wireframe. Mesh lines would read as structure that is not there.
 %
-%   The vertical axis is depth below the toe tip, L.toeTip - y, drawn with YDir
-%   reverse so the tip sits at 0 at the bottom and the assembly rises above it.
-%   Boxed and ticked: the axes carry the scale, so the figure needs neither a
-%   scale bar nor overlay lines drawn across the model.
+%   The vertical axis is height above the toe tip, y - L.toeTip, so the tip
+%   reads 0 and the assembly rises above it. Boxed and ticked: the axes carry
+%   the scale, so the figure needs neither a scale bar nor overlay lines drawn
+%   across the model.
 
     ws = warning;                     % full current state, restored on exit
     warning('off', 'MATLAB:polyshape:repairedBySimplify');
     warning('off', 'MATLAB:polyshape:boundary3Points');
     restore = onCleanup(@() warning(ws)); %#ok<NASGU>
 
-    yD = @(yy) L.toeTip - yy;         % STL y -> depth below the toe tip, mm
+    yH = @(yy) yy - L.toeTip;         % STL y -> height above the toe tip, mm
 
     tri = stlread(stlPath);
     P = tri.Points;  F = tri.ConnectivityList;
@@ -489,7 +489,7 @@ function fig = local_figure_assembly(stlPath, L, opt)
     kept = 0;
     for f = 1:size(F,1)
         x = P(F(f,:), 1).';
-        y = yD(P(F(f,:), 2).');
+        y = yH(P(F(f,:), 2).');
         if polyarea(x, y) < 1e-9, continue; end
         kept = kept + 1;
         parts{kept} = polyshape(x, y, 'Simplify', true);
@@ -511,33 +511,33 @@ function fig = local_figure_assembly(stlPath, L, opt)
     % Equal aspect FIRST: it changes the limits, and the cut tick below is
     % placed in data coordinates relative to them.
     axis(ax, 'equal');
-    set(ax, 'YDir', 'reverse', 'FontSize', 8, 'LineWidth', 0.5, 'Layer', 'top');
+    set(ax, 'FontSize', 8, 'LineWidth', 0.5, 'Layer', 'top');
     xl = xlim(ax);  yl = ylim(ax);
     xr = xl(2) - xl(1);
 
     % The cut as a tick on the right spine rather than a rule across the
     % model: same information, without a line laid over the geometry.
-    yCut = yD(opt.CutY);
+    yCut = yH(opt.CutY);
     plot(ax, [xl(2) - 0.06*xr, xl(2)], [yCut yCut], 'k-', 'LineWidth', 1.2);
     text(ax, xl(2) + 0.03*xr, yCut, 'foot area defined below here', ...
          'FontSize', 8, 'HorizontalAlignment', 'left', ...
          'VerticalAlignment', 'middle', 'Clipping', 'off');
 
     xlabel(ax, 'along foot (mm)', 'FontSize', 8);
-    ylabel(ax, 'depth below toe tip (mm)', 'FontSize', 8);
+    ylabel(ax, 'height above toe tip (mm)', 'FontSize', 8);
 
     if opt.Labels
         % Positions come from the geometry-derived landmarks, so the labels
         % name the part that is actually at that depth. (The earlier
         % fractional placement put 'beam' beside the inclined bar, which is
-        % not the structure the cut is defined on.) yl(1) is the shallowest
-        % edge of the axes, which YDir reverse draws at the top.
+        % not the structure the cut is defined on.) yl(2) is the top edge of
+        % the axes.
         xr2 = xl(2) + 0.03*xr;
-        lab = { 'mount',                                (yD(L.mountBottom) + yl(1))/2 ; ...
-                'inclined bar (linkage)',               (yCut + yD(L.mountBottom))/2  ; ...
-                'marker post',                          yD(L.postTop)                 ; ...
-                'rectangular beam (proximal toe bars)', (yCut + yD(L.barBottom))/2    ; ...
-                'distal toe segments',                  (yD(L.barBottom) + yD(L.toeTip))/2 };
+        lab = { 'mount',                                (yH(L.mountBottom) + yl(2))/2 ; ...
+                'inclined bar (linkage)',               (yCut + yH(L.mountBottom))/2  ; ...
+                'marker post',                          yH(L.postTop)                 ; ...
+                'rectangular beam (proximal toe bars)', (yCut + yH(L.barBottom))/2    ; ...
+                'distal toe segments',                  (yH(L.barBottom) + yH(L.toeTip))/2 };
         for i = 1:size(lab,1)
             text(ax, xr2, lab{i,2}, lab{i,1}, 'FontSize', 8, ...
                  'HorizontalAlignment','left', 'VerticalAlignment','middle', ...
