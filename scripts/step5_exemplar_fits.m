@@ -10,12 +10,13 @@
 % The fit is done on the EXACT v^2(z) solution of the KD equation with the
 % measured v0 as the boundary condition, not on a finite-difference
 % acceleration. Writing E = exp(-2*z/d1),
-%   speed2_model(z) = v0^2*E + grav*d1*(1-E)
+%   kd_speed2_model(z) = v0^2*E + grav*d1*(1-E)
 %                     - k*( (d1/mass)*z - (d1^2/(2*mass))*(1-E) )
 %
 % Base MATLAB only.
 
 clear; clc;
+addpath(fullfile(fileparts(fileparts(mfilename('fullpath'))), 'src'));  % shared KD helpers
 
 % -- constants --------------------------------------------------------
 mass = 65;      % projectile mass, g   (as track_tracers_2 / export_master_dataset)
@@ -42,7 +43,7 @@ LANDMARKS = [0.80 1.12];
 %
 % (1) ANALYTIC. Differentiate the implemented expression by hand:
 %
-%   speed2_model(z) = v0^2*E + grav*d1*(1-E)
+%   kd_speed2_model(z) = v0^2*E + grav*d1*(1-E)
 %                     - k*(d1/mass)*z + k*(d1^2/(2*mass))*(1-E)
 %   with E = exp(-2*z/d1)  ->  dE/dz = -(2/d1)*E
 %
@@ -80,8 +81,8 @@ zt  = linspace(0.01, 3, 200).';
 v0t = 170; kt = 1.7e5; d1t = 5;
 
 % (1) closed-form derivative vs the ODE right-hand side evaluated on the model
-du_closed = dspeed2_dz_closed(zt, v0t, kt, d1t, mass, grav);
-ut        = speed2_model(zt, v0t, kt, d1t, mass, grav);
+du_closed = kd_dspeed2_dz(zt, v0t, kt, d1t, mass, grav);
+ut        = kd_speed2_model(zt, v0t, kt, d1t, mass, grav);
 du_ode    = 2*grav - 2*ut/d1t - 2*kt*zt/mass;
 rel1 = max(abs(du_closed - du_ode) ./ max(abs(du_ode), eps));
 fprintf('  (1) analytic  : closed-form d/dz vs ODE RHS, max rel diff = %.3e (tol 1e-9)\n', rel1);
@@ -94,8 +95,8 @@ end
 
 % (2) central finite difference of the model vs the ODE right-hand side
 h = 1e-5;
-du_fd = (speed2_model(zt+h, v0t, kt, d1t, mass, grav) - ...
-         speed2_model(zt-h, v0t, kt, d1t, mass, grav)) / (2*h);
+du_fd = (kd_speed2_model(zt+h, v0t, kt, d1t, mass, grav) - ...
+         kd_speed2_model(zt-h, v0t, kt, d1t, mass, grav)) / (2*h);
 rel2 = max(abs(du_fd - du_ode) ./ max(abs(du_ode), eps));
 fprintf('  (2) numerical : central FD vs ODE RHS,        max rel diff = %.3e (tol 1e-6)\n', rel2);
 if ~(rel2 < 1e-6)
@@ -244,7 +245,7 @@ for i = 1:nEx
         fit_kd(E(i), Z_MIN_DEFAULT, V_MIN_DEFAULT, mass, grav);
     c_fit = mass / d1_fit;
 
-    % predicted final depth: the root of speed2_model(z) = 0
+    % predicted final depth: the root of kd_speed2_model(z) = 0
     d_pred = predict_d(E(i).v0, k_fit, d1_fit, mass, grav, E(i).d_final);
 
     % predicted stopping time: integrate dz/v(z) to where v = 2 cm/s, then close
@@ -290,7 +291,7 @@ figure('Position', [80 80 1500 760]);
 for i = 1:nEx
     m  = E(i).mask;
     zz = linspace(0, max(E(i).depth(m)), 400).';
-    uu = speed2_model(zz, E(i).v0, E(i).k_fit, E(i).d1_fit, mass, grav);
+    uu = kd_speed2_model(zz, E(i).v0, E(i).k_fit, E(i).d1_fit, mass, grav);
 
     % top row: speed2 data and the fitted curve
     ax1 = subplot(2, nEx, i);
@@ -303,7 +304,7 @@ for i = 1:nEx
     legend(ax1, {'data', 'KD fit'}, 'Location', 'northeast');
 
     % bottom row: residuals, with the geometry landmarks as dotted references
-    res = E(i).speed2(m) - speed2_model(E(i).depth(m), E(i).v0, E(i).k_fit, E(i).d1_fit, mass, grav);
+    res = E(i).speed2(m) - kd_speed2_model(E(i).depth(m), E(i).v0, E(i).k_fit, E(i).d1_fit, mass, grav);
     ax2 = subplot(2, nEx, nEx+i);
     hold(ax2,'on'); grid(ax2,'on'); box(ax2,'on');
     yline(ax2, 0, '-');
@@ -321,55 +322,24 @@ fprintf('\nfigure written: %s\n', FIGPATH);
 %  LOCAL FUNCTIONS
 %  ===================================================================
 
-function u = speed2_model(z, v0, k, d1, mass, grav)
-% Exact v^2(z) solution of the KD equation with v^2(0) = v0^2.
-    Ez = exp(-2*z/d1);
-    u = v0^2*Ez + grav*d1*(1-Ez) - k*( (d1/mass)*z - (d1^2/(2*mass))*(1-Ez) );
-end
-
-function du = dspeed2_dz_closed(z, v0, k, d1, mass, grav)
-% Closed-form derivative of speed2_model, worked out by hand in the
-% SELF-CHECK comment block above.
-    Ez = exp(-2*z/d1);
-    du = -2/d1 * ( v0^2*Ez - grav*d1*Ez + k*(d1^2/(2*mass))*(1-Ez) );
-end
-
 function [k_fit, d1_fit, rss, rmse_speed2, rmse_speed, nfit, mask] = ...
          fit_kd(Ei, z_min, v_min, mass, grav)
-% Nested fit. speed2_model is LINEAR in k at fixed d1, so k is solved in
-% closed form inside and only d1 is searched outside.
+% Applies the default mask, then hands the masked points to the shared nested
+% solver in src/ (closed-form k inside, fminbnd over d1 outside). The mask is
+% the caller's decision; kd_fit_nested only fits what it is given.
     mask = Ei.depth > z_min & isfinite(Ei.speed) & Ei.speed > v_min;
     nfit = sum(mask);
     z = Ei.depth(mask); u = Ei.speed2(mask);
-    % outer: one-dimensional search over the drag length
-    obj = @(d1) inner_rss(d1, z, u, Ei.v0, mass, grav);
-    d1_fit = fminbnd(obj, 0.1, 30);
-    % inner: the k that minimises RSS at the winning d1
-    [k_fit, rss] = inner_k(d1_fit, z, u, Ei.v0, mass, grav);
-    rmse_speed2 = sqrt(rss / nfit);
+    [k_fit, d1_fit, rss, rmse_speed2] = kd_fit_nested(z, u, Ei.v0, mass, grav);
     % back-transformed to speed; a negative model value has no square root
-    umod = speed2_model(z, Ei.v0, k_fit, d1_fit, mass, grav);
+    umod = kd_speed2_model(z, Ei.v0, k_fit, d1_fit, mass, grav);
     rmse_speed = sqrt(mean((sqrt(u) - sqrt(max(umod, 0))).^2));
 end
 
-function [k, rss] = inner_k(d1, z, u, v0, mass, grav)
-% Closed-form least squares for k at fixed d1: u = A + k*B.
-    Ez = exp(-2*z/d1);
-    A = v0^2*Ez + grav*d1*(1-Ez);                    % k-independent part
-    B = -( (d1/mass)*z - (d1^2/(2*mass))*(1-Ez) );   % coefficient of k
-    k = (B' * (u - A)) / (B' * B);                   % reported, never clamped
-    rss = sum((u - A - k*B).^2);
-end
-
-function rss = inner_rss(d1, z, u, v0, mass, grav)
-% Objective for the outer search: RSS after the inner k solve.
-    [~, rss] = inner_k(d1, z, u, v0, mass, grav);
-end
-
 function d_pred = predict_d(v0, k, d1, mass, grav, d_final)
-% Predicted final depth = the root of speed2_model(z) = 0, bracketed around
+% Predicted final depth = the root of kd_speed2_model(z) = 0, bracketed around
 % the measured d_final where a bracket exists.
-    f = @(z) speed2_model(z, v0, k, d1, mass, grav);
+    f = @(z) kd_speed2_model(z, v0, k, d1, mass, grav);
     zs = linspace(1e-6, max(6*d_final, 1), 600);
     fs = arrayfun(f, zs);
     j  = find(fs(1:end-1) > 0 & fs(2:end) <= 0, 1);   % first downward crossing
@@ -391,7 +361,7 @@ function [t_pred, z_cut, t_tail] = predict_t(v0, k, d1, mass, grav, d_pred)
 % define t_stop itself, v(t) = a_stop*(t - t_stop).
     t_pred = NaN; z_cut = NaN; t_tail = NaN;
     if ~isfinite(d_pred), return; end
-    f = @(z) speed2_model(z, v0, k, d1, mass, grav);
+    f = @(z) kd_speed2_model(z, v0, k, d1, mass, grav);
     % depth at which the model speed falls to 2 cm/s
     g = @(z) f(z) - 4;                                % speed^2 = 4 -> speed = 2
     try
@@ -403,7 +373,7 @@ function [t_pred, z_cut, t_tail] = predict_t(v0, k, d1, mass, grav, d_pred)
     t_main = integral(@(z) 1 ./ sqrt(max(f(z), eps)), 0, z_cut, ...
                       'AbsTol', 1e-10, 'RelTol', 1e-9);
     % terminal interval: constant deceleration dv/dt = 0.5 * d(v^2)/dz at z_cut
-    a_term = 0.5 * dspeed2_dz_closed(z_cut, v0, k, d1, mass, grav);
+    a_term = 0.5 * kd_dspeed2_dz(z_cut, v0, k, d1, mass, grav);
     if a_term < 0
         t_tail = 2 / abs(a_term);                     % from v = 2 cm/s to rest
     else
