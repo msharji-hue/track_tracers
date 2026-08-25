@@ -137,7 +137,12 @@ for i = 1:n
     kin = L.kin; meta = L.meta; calib = L.calib;
 
     % series (all frames where depth is defined; already masked by kd_kinematics)
-    z = kin.z(:); v = kin.v(:); a = kin.a(:); apg = kin.a_plus_g(:); t = kin.t_s(:);
+    % a+g is RECOMPUTED, never read from kin.a_plus_g: every _kin.mat written
+    % before the 2026-08 correction stores the old formula (-a - g), which is
+    % the same quantity offset by -2g. src/net_accel.m is the authority on the
+    % convention (g - a; free fall 0, rest +g) and recomputes from the raw a.
+    z = kin.z(:); v = kin.v(:); a = kin.a(:); t = kin.t_s(:);
+    apg = net_accel(kin, calib);
     fr = (1:numel(z)).';
     ok = isfinite(z);
     S(i).trialTag        = K.trialTag(i);
@@ -461,8 +466,9 @@ function D = local_dictionary()
     'a_stop_cm_s2'            'cm/s^2'   'kd_kinematics'                 'Slope of the pre-stop v(t) fit: KD acceleration discontinuity at stop. NaN on zero-drop rows.'
     'd_max_cm'                'cm'       'derived from kin.z'            'Maximum depth over the retained record (impact to stop + postCap). Compare with d_final_cm: the difference is rebound.'
     'rebound_cm'              'cm'       'derived'                       'd_max_cm - d_final_cm. Rebound after the stop; expected small.'
-    'apg_peak_cm_s2'          'cm/s^2'   'derived from kin.a_plus_g'     'Peak net grain deceleration g - a between impact and stop. Display-grade quantity (adaptive-window fit), not a fitted parameter.'
-    'z_at_apg_peak_cm'        'cm'       'derived'                       'Depth at apg_peak. For the later two-bump / A(z) diagnostic only.'
+    'a_plus_g_cm_s2'          'cm/s^2'   'net_accel(kin, calib)'         'SERIES column (master_series). Net grain acceleration a + g = g - a; free fall 0, rest +g, decelerating large positive. RECOMPUTED via net_accel from the raw a trace regardless of what the _kin.mat a_plus_g column holds: files written before the 2026-08 correction store the old (-a - g), which differs by exactly -2g = -1960 cm/s^2. Display-grade quantity; no fit reads it.'
+    'apg_peak_cm_s2'          'cm/s^2'   'derived from net_accel'        'Peak net grain deceleration g - a between impact and stop, taken from the RECOMPUTED a+g series (net_accel), not from the stored kin.a_plus_g column. Display-grade quantity (adaptive-window fit), not a fitted parameter.'
+    'z_at_apg_peak_cm'        'cm'       'derived'                       'Depth at apg_peak, from the recomputed a+g series. Unaffected by the a+g convention (a constant offset cannot move the argmax). For the later two-bump / A(z) diagnostic only.'
     'n_frames_impact_to_stop' ''         'derived'                       'stopFrame - impactFrame + 1. Time resolution of the deceleration record.'
     'v0_meas_cm_s'            'cm/s'     'load_kinematics_set'           'Raw pipeline v0 before the zero-drop quarantine. QA only; NEVER fit.'
     'd_final_meas_cm'         'cm'       'load_kinematics_set'           'Raw pipeline d_final before quarantine. QA only; NEVER fit.'
