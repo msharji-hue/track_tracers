@@ -89,6 +89,10 @@ for p = 1:2
             rb(b) = median(x(sa)) / median(x(sb));
         end
         ci = local_prctile(rb, [2.5 97.5]);
+        % retained only so the distribution can be persisted below; no draw is
+        % added or reordered here, so every printed number is unchanged
+        ratioBoot{p,q} = rb; ratioCI(p,q,:) = ci; ratioPt(p,q) = ratio; %#ok<SAGROW>
+        ratioName(p,q) = pname + " " + pairName(q);                     %#ok<SAGROW>
         if ci(1) <= 1 && ci(2) >= 1
             verdict = 'CI includes 1';
         else
@@ -280,6 +284,35 @@ legend(ax, [h0 hG], [{'M0 shared'} cellstr(MDL)], 'Location','northwest');
 
 exportgraphics(gcf, FIGPATH, 'Resolution', 200);
 fprintf('\nfigure written: %s\n', FIGPATH);
+
+%% ===================================================================
+%  PERSIST THE RESAMPLE DISTRIBUTION (added for fig_dynamics rev2)
+%  ===================================================================
+% Downstream figures need the per-geometry MEDIAN distribution, not just the
+% pairwise ratios, so it is generated here with this script's own scheme --
+% resample the geometry's cells with replacement, take the median -- and its
+% own seed. This block runs AFTER every print above and re-seeds explicitly,
+% so it cannot perturb any number this script reports.
+rng(1);
+medBoot = struct('k', nan(NB_RATIO,3), 'c', nan(NB_RATIO,3), 'd1', nan(NB_RATIO,3));
+for g = 1:3
+    ig = find(ok & C.model == MDL(g));
+    for b = 1:NB_RATIO
+        s = ig(randi(numel(ig), numel(ig), 1));
+        medBoot.k(b,g)  = median(C.k_fit(s));
+        medBoot.d1(b,g) = median(C.d1_fit(s));
+        % c is formed per cell as mass/d1 and medianed after, as the figure requires
+        medBoot.c(b,g)  = median(mass ./ C.d1_fit(s));
+    end
+end
+LADDER_BOOT = struct('scheme', 'resample cells within geometry, with replacement', ...
+    'B', NB_RATIO, 'seed', 1, 'models', MDL, 'pairName', pairName, ...
+    'ratioBoot', {ratioBoot}, 'ratioCI', ratioCI, 'ratioPt', ratioPt, ...
+    'ratioName', ratioName, 'medBoot', medBoot, ...
+    'cellCsv', cellCsv, 'mass', mass);
+bootPath = fullfile(EXPDIR, 'step5_ladder_bootstrap.mat');
+save(bootPath, 'LADDER_BOOT');
+fprintf('resample distribution written: %s\n', bootPath);
 
 %% ===================================================================
 %  LOCAL FUNCTIONS
